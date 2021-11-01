@@ -2137,13 +2137,13 @@ kbd {
   left: 0;
 }
 .mode-track-moon::before {
-  content: '暗';
+  content: 'd';
 }
 .mode-track-sun {
   right: 0;
 }
 .mode-track-sun::before {
-  content: '亮';
+  content: 'l';
 }
 .mode-thumb {
   position: absolute;
