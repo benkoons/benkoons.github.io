@@ -2250,13 +2250,13 @@ kbd {
   left: 0;
 }
 .mode-track-moon::before {
-  content: 'd';
+  content: 'D';
 }
 .mode-track-sun {
   right: 0;
 }
 .mode-track-sun::before {
-  content: 'l';
+  content: 'L';
 }
 .mode-thumb {
   position: absolute;
