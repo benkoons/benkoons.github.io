@@ -353,13 +353,13 @@ html {
   -webkit-box-sizing: border-box;
   -moz-box-sizing: border-box;
   box-sizing: border-box;
-  font-size: 20px;
+  font-size: 18px;
 }
 body {
   margin: 0;
   padding: 0;
   font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif, Arial;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 2;
   color: var(--color-font);
   background-color: var(--color-gray-250);
@@ -376,7 +376,7 @@ h6 {
   line-height: 1.5;
 }
 h1 {
-  font-size: 2em;
+  font-size: 1.6em;
 }
 h2 {
   font-size: 1.5em;
@@ -493,7 +493,7 @@ kbd {
   left: 50%;
   z-index: 2;
   font-family: sans-serif, Arial;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: normal;
   font-style: normal;
   line-height: 2;
@@ -548,7 +548,7 @@ kbd {
   position: relative;
   border-radius: 3px;
   padding: 8px 12px;
-  font-size: 16px;
+  font-size: 15px;
   line-height: 1rem;
   background-color: #fff;
   -webkit-box-shadow: 0 4px 12px rgba(0,0,0,0.15);
@@ -666,7 +666,7 @@ kbd {
   margin: 0 auto;
   padding: 20px;
   width: 100%;
-  font-size: 16px;
+  font-size: 15px;
 }
 .content-wrap {
   width: calc(100% - 330px);
@@ -728,7 +728,7 @@ kbd {
 }
 .header-inner {
   width: 100%;
-  font-size: 18px;
+  font-size: 15px;
   background-color: #2d2e30;
 }
 .header-inner--bgcolor {
@@ -869,7 +869,7 @@ kbd {
   margin: 0;
   padding: 0;
   width: 100%;
-  font-size: 18px;
+  font-size: 15px;
   line-height: 1;
   text-align: center;
 }
@@ -951,7 +951,7 @@ kbd {
 .footer-inner {
   position: relative;
   padding: 1rem;
-  font-size: 16px;
+  font-size: 15px;
   text-align: center;
   color: #f5f6f7;
   background-color: #2d2e30;
@@ -976,7 +976,7 @@ kbd {
   background-color: var(--color-card);
   padding: 1rem;
   width: 300px;
-  font-size: 16px;
+  font-size: 15px;
 }
 .sidebar--sticky {
   position: fixed;
@@ -1026,15 +1026,6 @@ kbd {
   white-space: normal;
   word-wrap: break-word;
   word-break: break-word;
-}
-.sidebar-toc .toc-child {
-  display: none;
-}
-.sidebar-toc .active > .toc-child {
-  display: block;
-}
-.sidebar-toc .current > .toc-child {
-  display: block;
 }
 .sidebar-toc .active > a,
 .sidebar-toc .current > a {
@@ -1175,7 +1166,7 @@ kbd {
   padding: 1rem;
   width: 700px;
   max-height: 80%;
-  font-size: 16px;
+  font-size: 15px;
   color: var(--color-gray-700);
   background-color: var(--color-gray-250);
 }
@@ -1390,7 +1381,7 @@ kbd {
 }
 .category-list-count {
   margin-left: 0.3em;
-  font-size: 13px;
+  font-size: 12px;
   color: var(--color-gray-600);
 }
 .category-list-count::before {
@@ -1401,7 +1392,7 @@ kbd {
 }
 .categorypage-title,
 .tagpage-title {
-  font-size: 24px;
+  font-size: 23px;
   text-align: center;
 }
 .categorypage-title__name,
@@ -1599,9 +1590,6 @@ kbd {
 }
 .post-meta-item--readtime {
   color: #49b1f5;
-}
-.post-meta-item--visitors {
-  color: #fc6423;
 }
 .post-ending {
   margin-bottom: 1rem;
@@ -1989,6 +1977,7 @@ kbd {
   padding: 1rem 0 0;
   text-align: center;
   color: var(--color-gray-400);
+  border-top: 1px dashed var(--color-gray-300);
 }
 .back2top {
   position: fixed;
@@ -2401,14 +2390,14 @@ kbd {
   margin: 12px 0;
 }
 .note-plugin strong {
-  font-size: 18px;
+  font-size: 17px;
   line-height: 1.75;
 }
 .note-plugin__icon {
   position: absolute;
   top: 1em;
   left: 12px;
-  font-size: 18px;
+  font-size: 17px;
   line-height: 1;
 }
 .note-plugin__icon--default {
@@ -2513,6 +2502,18 @@ kbd {
 .friends-plugin__item-info__intro {
   font-size: 0.9em;
   color: #999;
+}
+.busuanzi-siteuv__icon,
+.busuanzi-sitepv__icon,
+.busuanzi-siteuv__info,
+.busuanzi-sitepv__info,
+.busuanzi-siteuv__value,
+.busuanzi-sitepv__value {
+  margin: 0 2px;
+}
+.busuanzi > span:nth-child(2)::before {
+  content: '|';
+  margin: 0 10px;
 }
 @media (min-width: 1138px) {
   .header-nav-inner {
@@ -2628,7 +2629,7 @@ kbd {
     font-size: 2rem;
   }
   .header-banner-info__subtitle {
-    font-size: 14px;
+    font-size: 13px;
   }
   .header-banner-arrow {
     bottom: 0.5rem;
@@ -2639,7 +2640,7 @@ kbd {
   .content,
   .comments {
     padding: 0.6rem 0.8rem;
-    font-size: 15px;
+    font-size: 14px;
   }
   .archive {
     margin-left: 0.5rem;

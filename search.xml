@@ -1,11 +1,50 @@
 <?xml version="1.0" encoding="utf-8"?>
 <search>
   <entry>
+    <title>YARN源码解析: FairScheduler资源调度</title>
+    <url>/2021/11/YARN%E6%BA%90%E7%A0%81%E8%A7%A3%E6%9E%90-FairScheduler%E8%B5%84%E6%BA%90%E8%B0%83%E5%BA%A6/</url>
+    <content><![CDATA[
+        <h2 id="1-YARN-资源调度方式">
+          <a href="#1-YARN-资源调度方式" class="heading-link"><i class="fas fa-link"></i></a><a href="#1-YARN-资源调度方式" class="headerlink" title="1. YARN 资源调度方式"></a>1. YARN 资源调度方式</h2>
+      <p>资源调度方式确定了当任务提交到集群，如何为其分配资源执行任务。YARN 组件默认包括 FairScheduler（公平调度器）、CapacityScheduler（容量调度器） 和 FifoScheduler（先进先出调度器） 三种调度器实现方式。 本文主要 FairScheduler 公平调度去，FairScheduler 中提供了两种资源调度方式：心跳调度和连续调度。</p>
+<ul>
+<li><strong>心跳调度方式：</strong>NodeManager 向 ResourceManager 汇报了自身资源情况（比如，当前可用资源，正在使用的资源，已经释放的资源)，这个 RPC 会触发 ResourceManager 调用 nodeUpdate() 方法，这个方法为这个节点进行一次资源调度，即，从维护的 Queue 中取出合适的应用的资源请求(合适 ，指的是这个资源请求既不违背队列的最大资源使用限制，也不违背这个 NodeManager 的剩余资源量限制)放到这个NodeManager上运行。这种调度方式一个主要缺点就是调度缓慢，当一个NodeManager即使已经有了剩余资源，调度也只能在心跳发送以后才会进行，不够及时。</li>
+<li><strong>连续调度方式：</strong>由一个独立的线程 ContinuousSchedulingThread 负责进行持续的资源调度，与 NodeManager 的心跳是异步进行的。即不需要等到 NodeManager 发来心跳才开始资源调度。 </li>
+</ul>
+<p>无论是 NodeManager 心跳时触发调度，还是通过 ContinuousSchedulingThread 进行实时、持续触发，他们对某个节点进行一次调度的算法和原理是公用的，都是通过 synchronized void attemptScheduling(FSSchedulerNode node) 来在某个节点上进行一次调度，方法的的参数代表了准备进行资源分配的节点。两种触发机制不同的地方只有两个：</p>
+<ul>
+<li>调度时机：心跳调度仅仅发生在收到了某个 NodeManager 的心跳信息的情况下，持续调度则不依赖与NodeManager的心跳通信，是连续发生的，当心跳到来，会将调度结果直接返回给 NodeManager；</li>
+<li>调度范围：心跳调度机制下，当收到某个节点的心跳，就对这个节点且仅仅对这个节点进行一次调度，即谁的心跳到来就触发对谁的调度，而持续调度的每一轮，是会遍历当前集群的所有节点，每个节点依次进行一次调度，保证一轮下来每一个节点都被公平的调度一次；</li>
+</ul>
+<p>在集群环境中，连续调度默认不开启，只有设置 yarn.scheduler.fair.continuous-scheduling-enabled 参数为 true，才会启动该线程。连续调度现在已经不推荐了，因为它会因为锁的问题，而导致资源调度变得缓慢。可以使用 yarn.scheduler.assignmultiple 参数启动批量分配功能，作为连续调度的替代。</p>
+
+        <h2 id="2-YARN-调度流程">
+          <a href="#2-YARN-调度流程" class="heading-link"><i class="fas fa-link"></i></a><a href="#2-YARN-调度流程" class="headerlink" title="2. YARN 调度流程"></a>2. YARN 调度流程</h2>
+      <p>本文的调度流程主要介绍心跳调度的方式，下图是 Yarn 心跳调度的主要流程。</p>
+<p><img src="/.io//11/YARN%E6%BA%90%E7%A0%81%E8%A7%A3%E6%9E%90-FairScheduler%E8%B5%84%E6%BA%90%E8%B0%83%E5%BA%A6/1372882-20200826170350663-775889568.png" alt="333"></p>
+
+        <h3 id="2-1-名词解析">
+          <a href="#2-1-名词解析" class="heading-link"><i class="fas fa-link"></i></a><a href="#2-1-名词解析" class="headerlink" title="2.1 名词解析"></a>2.1 名词解析</h3>
+      <ul>
+<li>ResrouceSacheduler 是YARN 的调度器，负责 Container 的分配。下面主要是以 FairScheduler 调度器为例。</li>
+<li>AsyncDispatcher 是单线程的事件分发器，负责向调度器发送调度事件。</li>
+<li>ResourceTrackerService 是资源跟踪器，主要负责接收处理 NodeManager 的心跳信息。</li>
+<li>ApplicationMasterService 是作业的 RPC 服务，主要负责接收处理作业的心跳信息。</li>
+<li>AppMaster 是作业的程序控制器，负责跟 YARN 交互获取/释放资源。</li>
+</ul>
+]]></content>
+      <categories>
+        <category>YARN</category>
+      </categories>
+      <tags>
+        <tag>YARN</tag>
+      </tags>
+  </entry>
+  <entry>
     <title>好瘾与坏瘾</title>
     <url>/2021/11/%E5%A5%BD%E7%98%BE%E4%B8%8E%E5%9D%8F%E7%98%BE/</url>
-    <content><![CDATA[<p>瘾是人的一种行为思想习惯，是人对事物产生的想法以及一连串的行动，同样的一件事物，不同的人会产生不同的行为，比如有些人的瘾在手机、游戏上，有些人的瘾在运动、学习上，前者属于坏瘾，后者属于好瘾，关注的点不一样，其产生的行为也截然不同。</p>
-<span id="more"></span>
-
+    <content><![CDATA[<p><img src="/.io//11/%E5%A5%BD%E7%98%BE%E4%B8%8E%E5%9D%8F%E7%98%BE/1.jpeg" alt="好瘾与坏瘾.jpg"></p>
+<p>瘾是人的一种行为思想习惯，是人对事物产生的想法以及一连串的行动，同样的一件事物，不同的人会产生不同的行为，比如有些人的瘾在手机、游戏上，有些人的瘾在运动、学习上，前者属于坏瘾，后者属于好瘾，关注的点不一样，其产生的行为也截然不同。</p>
 <p>那好瘾与坏瘾如何区分？好瘾难学，需要自律地劳动才能获得满足，得到的快乐是建设性的，简单地说，学校让孩子学的德智体美劳，都是好瘾。坏瘾易学，放纵自己就可以获得满足，得到的快乐是毁灭性的，比如沉迷手机、游戏、酒精、毒品、赌博。</p>
 <p>我们终其一生，碌碌无为必然是毫无意义的，应该将大部分时间都放在追求好瘾的道路上，精通一门手艺，专注一项技术，培养一项爱好等等，用长远眼光去看待事物的发展，将自己作为投资的重心，在好瘾的领域里深耕细作，过有好瘾的人生。</p>
 <hr>
