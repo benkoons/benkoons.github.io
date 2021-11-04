@@ -1,6 +1,90 @@
 <?xml version="1.0" encoding="utf-8"?>
 <search>
   <entry>
+    <title>Java原理: 阻塞队列LinkedBlockingQueue</title>
+    <url>/2021/11/03/Java%E5%8E%9F%E7%90%86-%E9%98%BB%E5%A1%9E%E9%98%9F%E5%88%97LinkedBlockingQueue/</url>
+    <content><![CDATA[<h2 id="1-什么是阻塞队列"><a href="#1-什么是阻塞队列" class="headerlink" title="1. 什么是阻塞队列"></a>1. 什么是阻塞队列</h2><p>阻塞队列（BlockingQueue）是一个支持两个附加操作的队列。这两个附加的操作支持阻塞的插入和移除方法。</p>
+<ul>
+<li>支持阻塞的插入方法：当队列满时，队列会阻塞插入元素的线程，直到队列不满。</li>
+<li>支持阻塞的移除方法：当队列为空时，获取元素的线程会等待队列变为非空。</li>
+</ul>
+<p>阻塞队列常用于生产者和消费者的场景，生产者是向队列里添加元素的线程，消费者是从队列里取元素的线程。阻塞队列就是生产者用来存放元素、消费者用来获取元素的容器。</p>
+<p>在阻塞队列不可用时，这两个附加操作提供了4种处理方式，如下所示：<br><img src="Java%E5%8E%9F%E7%90%86-%E9%98%BB%E5%A1%9E%E9%98%9F%E5%88%97LinkedBlockingQueue.assets/1635924725139-70fd0f74-fab6-4498-874d-5ff54ca0f44f-20211104235209002.png" alt="未标题-1.png"></p>
+<ul>
+<li>抛出异常：当队列满时，如果再往队列里插入元素，会抛出IllegalArgumentException异常。当队列空时，从队列里获取元素会抛出NoSuchElementException异常。</li>
+<li>返回特殊值：当往队列插入元素时，会返回元素是否插入成功，成功返回true。如果是移除方法，则是从队列里取出一个元素，如果没有则返回null。</li>
+<li>一直阻塞：当阻塞队列满时，如果生产者线程往队列里put元素，队列会一直阻塞生产者线程，直到队列可用或者响应中断退出。当队列空时，如果消费者从队列里take元素，队列会阻塞住消费者线程，直到队列不为空。</li>
+<li>超时退出：当阻塞队列满时，队列会阻塞生产者线程一段时间，如果超过一定的时间，生产者线程就会退出。</li>
+</ul>
+<blockquote>
+<p>Tips:如果是无界阻塞队列，队列不可能会出现满的情况，所以使用add/put/offer方法永远不会被阻塞，而且使用offer方法时，该方法永远返回true。</p>
+</blockquote>
+<h2 id="2-基于阻塞队列的生产消费模式"><a href="#2-基于阻塞队列的生产消费模式" class="headerlink" title="2. 基于阻塞队列的生产消费模式"></a>2. 基于阻塞队列的生产消费模式</h2><h3 id="2-1-生产者消费者逻辑"><a href="#2-1-生产者消费者逻辑" class="headerlink" title="2.1 生产者消费者逻辑"></a>2.1 生产者消费者逻辑</h3><p>LinkedBlockingQueue 实现是线程安全的阻塞队列，实现了先进先出等特性，是生产者消费者模式的首选，LinkedBlockingQueue 可以指定队列容量，如果不指定，默认最大是 Integer.MAX_VALUE。用例以指定容量的有界队列为主，构造一个容量为 5 的有界的阻塞队列 LinkedBlockingQueue，并创建独立的生产者线程和消费者线程，生产者以 1s 的间隔持续的生产数据，消费者以 2s 的间隔消费数据，保证消费者的消费速度跟不上生产者的生产速度，让阻塞队列达到容量限制。</p>
+<figure class="highlight java"><table><tr><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="class"><span class="keyword">class</span> <span class="title">BlockQueue</span> </span>&#123;</span><br><span class="line"></span><br><span class="line">  BlockingQueue &lt; Integer &gt; queue = <span class="keyword">new</span> LinkedBlockingQueue&lt;&gt;(<span class="number">5</span>);</span><br><span class="line"></span><br><span class="line">  <span class="comment">/**</span></span><br><span class="line"><span class="comment">   * 生产者</span></span><br><span class="line"><span class="comment">   */</span></span><br><span class="line">  <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">produce</span><span class="params">()</span> </span>&#123;</span><br><span class="line">    <span class="keyword">new</span> Thread(<span class="keyword">new</span> Runnable() &#123;</span><br><span class="line">      <span class="keyword">int</span> i = <span class="number">0</span>;</span><br><span class="line">      <span class="function">Override</span></span><br><span class="line"><span class="function">      <span class="keyword">public</span> <span class="keyword">void</span> <span class="title">run</span><span class="params">()</span> </span>&#123;</span><br><span class="line">        <span class="keyword">while</span>(<span class="keyword">true</span>) &#123;</span><br><span class="line">          <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="comment">// 向阻塞队列中添加元素</span></span><br><span class="line">            queue.put(++i);</span><br><span class="line">            Thread.sleep(<span class="number">1000</span>);</span><br><span class="line">            <span class="comment">// 生产 15 个数据</span></span><br><span class="line">            <span class="keyword">if</span>(i == <span class="number">15</span>) &#123;</span><br><span class="line">              <span class="keyword">break</span>;</span><br><span class="line">            &#125;</span><br><span class="line">          &#125; <span class="keyword">catch</span>(Exception e) &#123;</span><br><span class="line">            e.printStackTrace();</span><br><span class="line">          &#125;</span><br><span class="line">        &#125;</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;, <span class="string">&quot;produce-thread&quot;</span>).start();</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="comment">/**</span></span><br><span class="line"><span class="comment">   * 消费者</span></span><br><span class="line"><span class="comment">   */</span></span><br><span class="line">  <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">consumer</span><span class="params">()</span> </span>&#123;</span><br><span class="line">    <span class="keyword">new</span> Thread(<span class="keyword">new</span> Runnable() &#123;@</span><br><span class="line">      <span class="function">Override</span></span><br><span class="line"><span class="function">      <span class="keyword">public</span> <span class="keyword">void</span> <span class="title">run</span><span class="params">()</span> </span>&#123;</span><br><span class="line">        <span class="keyword">while</span>(<span class="keyword">true</span>) &#123;</span><br><span class="line">          <span class="keyword">try</span> &#123;</span><br><span class="line">            System.out.println(<span class="string">&quot;queue size = &quot;</span> + queue.size());</span><br><span class="line">            <span class="comment">// 从队列中取数据</span></span><br><span class="line">            Integer ele = queue.take();</span><br><span class="line">            System.out.println(Thread.currentThread().getName() + <span class="string">&quot; = &quot;</span> + ele);</span><br><span class="line">            Thread.sleep(<span class="number">2000</span>);</span><br><span class="line">          &#125; <span class="keyword">catch</span>(Exception e) &#123;</span><br><span class="line">            e.printStackTrace();</span><br><span class="line">          &#125;</span><br><span class="line">        &#125;</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;, <span class="string">&quot;consumer-thread&quot;</span>).start();</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="function"><span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">void</span> <span class="title">main</span><span class="params">(String[] args)</span> </span>&#123;</span><br><span class="line">    BlockQueue obj = <span class="keyword">new</span> BlockQueue();</span><br><span class="line">    obj.produce();</span><br><span class="line">    obj.consumer();</span><br><span class="line">  &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="2-2-插入方法和移除方法组合用例"><a href="#2-2-插入方法和移除方法组合用例" class="headerlink" title="2.2 插入方法和移除方法组合用例"></a>2.2 插入方法和移除方法组合用例</h3><p>构造不同插入方法和移除方法的测试用例，看看阻塞队列的行为表现有什么不一样。添加元素的方法有 put/offer/add，移除元素的方法有 take/poll/remove，具体介绍如下。</p>
+<p>插入方法：</p>
+<ul>
+<li>put：若队列已满了则发生阻塞，等待元素加入队列。</li>
+<li>offer：若发现队列已满无法添加的话，会直接返回false。</li>
+<li>add：若发现队列已满直接抛出异常。</li>
+</ul>
+<p>移除方法：</p>
+<ul>
+<li>take：若队列为空，发生阻塞，等待有元素以取出。</li>
+<li>poll：若队列为空，返回null。</li>
+<li>remove：若队列为空，抛出 NoSuchElementException 异常。</li>
+</ul>
+<h4 id="2-2-1-put和take组合"><a href="#2-2-1-put和take组合" class="headerlink" title="2.2.1 put和take组合"></a>2.2.1 put和take组合</h4><p>运行结果如下：</p>
+<ul>
+<li>队列满时，put 方法阻塞等待队列有空闲位以添加元素；</li>
+<li>队列空时，take 方法阻塞等待队列有新元素抵达以取出元素。</li>
+</ul>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 1</span><br><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 2</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 3</span><br><span class="line">queue size = 3</span><br><span class="line">consumer-thread = 4</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 5</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 6</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 7</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 8</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 9</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 10</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 11</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 12</span><br><span class="line">queue size = 3</span><br><span class="line">consumer-thread = 13</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 14</span><br><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 15</span><br><span class="line">queue size = 0</span><br><span class="line">（生产者停止生产，消费者阻塞等待中～～）</span><br></pre></td></tr></table></figure>
+
+<h4 id="2-2-2-offer和take组合"><a href="#2-2-2-offer和take组合" class="headerlink" title="2.2.2 offer和take组合"></a>2.2.2 offer和take组合</h4><p>为让 offer 添加操作效果更明显，将消费者线程 consumer 的线程等待时间调整为 4s (<code>Thread.sleep(4000)</code>)。<br>运行结果如下：</p>
+<ul>
+<li>队列满时，offer 方法发现队列已满添加元素返回 false，元素丢弃，不添加到队列中；</li>
+<li>队列空时，take 方法阻塞等待队列有新元素抵达以取出元素。</li>
+</ul>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 1</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 2</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 3</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 4</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 5</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 6</span><br><span class="line">queue size = 3</span><br><span class="line">consumer-thread = 7</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 10</span><br><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 13</span><br><span class="line">queue size = 0</span><br><span class="line">（消费者会丢失部分数据）</span><br></pre></td></tr></table></figure>
+
+<h4 id="2-2-3-add和take组合"><a href="#2-2-3-add和take组合" class="headerlink" title="2.2.3 add和take组合"></a>2.2.3 add和take组合</h4><p>运行结果如下：</p>
+<ul>
+<li>队列满时，add 方法直接抛异常，生产者无法添加元素，消费者处理完队列剩余元素；</li>
+<li>队列空时，take 方法阻塞等待队列有新元素抵达以取出元素。</li>
+</ul>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 1</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 2</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 3</span><br><span class="line">queue size = 3</span><br><span class="line">consumer-thread = 4</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 5</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 6</span><br><span class="line">java.lang.IllegalStateException: Queue full</span><br></pre></td></tr></table></figure>
+
+<h4 id="2-2-4-put和poll组合"><a href="#2-2-4-put和poll组合" class="headerlink" title="2.2.4 put和poll组合"></a>2.2.4 put和poll组合</h4><p>生产者生产数据量改为 10，运行结果如下：</p>
+<ul>
+<li>队列满时，put 方法阻塞等待队列有空闲位以添加元素；</li>
+<li>队列空时，poll 方法返回 null。</li>
+</ul>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 1</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 2</span><br><span class="line">queue size = 3</span><br><span class="line">consumer-thread = 3</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 4</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 5</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 6</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 7</span><br><span class="line">queue size = 3</span><br><span class="line">consumer-thread = 8</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 9</span><br><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 10</span><br><span class="line">queue size = 0</span><br><span class="line">consumer-thread = null</span><br><span class="line">queue size = 0</span><br><span class="line">consumer-thread = null</span><br></pre></td></tr></table></figure>
+
+<h4 id="2-2-5-put和remove组合"><a href="#2-2-5-put和remove组合" class="headerlink" title="2.2.5 put和remove组合"></a>2.2.5 put和remove组合</h4><p>生产者生产数据量改为 10，运行结果如下: </p>
+<ul>
+<li>队列满时，put 方法阻塞等待队列有空闲位以添加元素；</li>
+<li>队列空时，remove 方法抛 NoSuchElementException 异常。</li>
+</ul>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 1</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 2</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 3</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 4</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 5</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 6</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 7</span><br><span class="line">queue size = 3</span><br><span class="line">consumer-thread = 8</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 9</span><br><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 10</span><br><span class="line">queue size = 0</span><br><span class="line">java.util.NoSuchElementException</span><br></pre></td></tr></table></figure>
+
+<h4 id="2-2-6-小结"><a href="#2-2-6-小结" class="headerlink" title="2.2.6 小结"></a>2.2.6 小结</h4><p>至此，通过介绍和用例场景，对 LinkedBlockingQueue 阻塞队列的添加元素 add/put/offer 和移除元素 remove/poll/take 两类操作应该比较熟悉。简单来讲，对于有界的阻塞队列，put 和 take 组合是最完美的组合，队列满时 put 阻塞等待元素添加，队列空时 take 阻塞等待元素抵达以取出，不会出现数据丢失或抛异常的情况。</p>
+<h2 id="参考资料"><a href="#参考资料" class="headerlink" title="参考资料"></a>参考资料</h2><ul>
+<li><a href="https://juejin.cn/post/6844903640709201934">Java并发系列——阻塞队列</a></li>
+</ul>
+]]></content>
+      <categories>
+        <category>Java</category>
+      </categories>
+      <tags>
+        <tag>Java</tag>
+        <tag>数据结构</tag>
+        <tag>多线程</tag>
+      </tags>
+  </entry>
+  <entry>
     <title>YARN源码解析: FairScheduler资源调度</title>
     <url>/2021/11/03/YARN%E6%BA%90%E7%A0%81%E8%A7%A3%E6%9E%90-FairScheduler%E8%B5%84%E6%BA%90%E8%B0%83%E5%BA%A6/</url>
     <content><![CDATA[<h2 id="1-YARN-资源调度方式"><a href="#1-YARN-资源调度方式" class="headerlink" title="1. YARN 资源调度方式"></a>1. YARN 资源调度方式</h2><p>资源调度方式确定了当任务提交到集群，如何为其分配资源执行任务。YARN 组件默认包括 FairScheduler（公平调度器）、CapacityScheduler（容量调度器） 和 FifoScheduler（先进先出调度器） 三种调度器实现方式。 本文主要 FairScheduler 公平调度去，FairScheduler 中提供了两种资源调度方式：心跳调度和连续调度。</p>
@@ -32,123 +116,6 @@
       </tags>
   </entry>
   <entry>
-    <title>Java原理: 阻塞队列LinkedBlockingQueue</title>
-    <url>/2021/11/03/Java%E5%8E%9F%E7%90%86-%E9%98%BB%E5%A1%9E%E9%98%9F%E5%88%97LinkedBlockingQueue/</url>
-    <content><![CDATA[<h2 id="1-什么是阻塞队列"><a href="#1-什么是阻塞队列" class="headerlink" title="1. 什么是阻塞队列"></a>1. 什么是阻塞队列</h2><p>阻塞队列（BlockingQueue）是一个支持两个附加操作的队列。这两个附加的操作支持阻塞的插入和移除方法。<br></p>
-<ul>
-<li><p>支持阻塞的插入方法：当队列满时，队列会阻塞插入元素的线程，直到队列不满。</p>
-</li>
-<li><p>支持阻塞的移除方法：当队列为空时，获取元素的线程会等待队列变为非空。</p>
-</li>
-</ul>
-<p>阻塞队列常用于生产者和消费者的场景，生产者是向队列里添加元素的线程，消费者是从队列里取元素的线程。阻塞队列就是生产者用来存放元素、消费者用来获取元素的容器。</p>
-<p>在阻塞队列不可用时，这两个附加操作提供了4种处理方式，如下所示：</p>
-<p><img src="1635924725139-70fd0f74-fab6-4498-874d-5ff54ca0f44f.png" alt="img"></p>
-<ul>
-<li><p>抛出异常：当队列满时，如果再往队列里插入元素，会抛出IllegalArgumentException异常。当队列空时，从队列里获取元素会抛出NoSuchElementException异常。</p>
-</li>
-<li><p>返回特殊值：当往队列插入元素时，会返回元素是否插入成功，成功返回true。如果是移除方法，则是从队列里取出一个元素，如果没有则返回null。</p>
-</li>
-<li><p>一直阻塞：当阻塞队列满时，如果生产者线程往队列里put元素，队列会一直阻塞生产者线程，直到队列可用或者响应中断退出。当队列空时，如果消费者从队列里take元素，队列会阻塞住消费者线程，直到队列不为空。</p>
-</li>
-<li><p>超时退出：当阻塞队列满时，队列会阻塞生产者线程一段时间，如果超过一定的时间，生产者线程就会退出。</p>
-</li>
-</ul>
-<blockquote>
-<p>Tips:如果是无界阻塞队列，队列不可能会出现满的情况，所以使用add/put/offer方法永远不会被阻塞，而且使用offer方法时，该方法永远返回true。</p>
-</blockquote>
-<h2 id="2-基于阻塞队列的生产消费模式"><a href="#2-基于阻塞队列的生产消费模式" class="headerlink" title="2. 基于阻塞队列的生产消费模式"></a>2. 基于阻塞队列的生产消费模式</h2><h3 id="2-1-生产者消费者逻辑"><a href="#2-1-生产者消费者逻辑" class="headerlink" title="2.1 生产者消费者逻辑"></a>2.1 生产者消费者逻辑</h3><p>LinkedBlockingQueue 实现是线程安全的阻塞队列，实现了先进先出等特性，是生产者消费者模式的首选，LinkedBlockingQueue 可以指定队列容量，如果不指定，默认最大是 Integer.MAX_VALUE。用例以指定容量的有界队列为主，构造一个容量为 5 的有界的阻塞队列 LinkedBlockingQueue，并创建独立的生产者线程和消费者线程，生产者以 1s 的间隔持续的生产数据，消费者以 2s 的间隔消费数据，保证消费者的消费速度跟不上生产者的生产速度，让阻塞队列达到容量限制。</p>
-<figure class="highlight java"><table><tr><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="class"><span class="keyword">class</span> <span class="title">BlockQueue</span> </span>&#123;</span><br><span class="line"></span><br><span class="line">  BlockingQueue &lt; Integer &gt; queue = <span class="keyword">new</span> LinkedBlockingQueue&lt;&gt;(<span class="number">5</span>);</span><br><span class="line"></span><br><span class="line">  <span class="comment">/**</span></span><br><span class="line"><span class="comment">   * 生产者</span></span><br><span class="line"><span class="comment">   */</span></span><br><span class="line">  <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">produce</span><span class="params">()</span> </span>&#123;</span><br><span class="line">    <span class="keyword">new</span> Thread(<span class="keyword">new</span> Runnable() &#123;</span><br><span class="line">      <span class="keyword">int</span> i = <span class="number">0</span>;</span><br><span class="line">      <span class="function">Override</span></span><br><span class="line"><span class="function">      <span class="keyword">public</span> <span class="keyword">void</span> <span class="title">run</span><span class="params">()</span> </span>&#123;</span><br><span class="line">        <span class="keyword">while</span>(<span class="keyword">true</span>) &#123;</span><br><span class="line">          <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="comment">// 向阻塞队列中添加元素</span></span><br><span class="line">            queue.put(++i);</span><br><span class="line">            Thread.sleep(<span class="number">1000</span>);</span><br><span class="line">            <span class="comment">// 生产 15 个数据</span></span><br><span class="line">            <span class="keyword">if</span>(i == <span class="number">15</span>) &#123;</span><br><span class="line">              <span class="keyword">break</span>;</span><br><span class="line">            &#125;</span><br><span class="line">          &#125; <span class="keyword">catch</span>(Exception e) &#123;</span><br><span class="line">            e.printStackTrace();</span><br><span class="line">          &#125;</span><br><span class="line">        &#125;</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;, <span class="string">&quot;produce-thread&quot;</span>).start();</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="comment">/**</span></span><br><span class="line"><span class="comment">   * 消费者</span></span><br><span class="line"><span class="comment">   */</span></span><br><span class="line">  <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">consumer</span><span class="params">()</span> </span>&#123;</span><br><span class="line">    <span class="keyword">new</span> Thread(<span class="keyword">new</span> Runnable() &#123;@</span><br><span class="line">      <span class="function">Override</span></span><br><span class="line"><span class="function">      <span class="keyword">public</span> <span class="keyword">void</span> <span class="title">run</span><span class="params">()</span> </span>&#123;</span><br><span class="line">        <span class="keyword">while</span>(<span class="keyword">true</span>) &#123;</span><br><span class="line">          <span class="keyword">try</span> &#123;</span><br><span class="line">            System.out.println(<span class="string">&quot;queue size = &quot;</span> + queue.size());</span><br><span class="line">            <span class="comment">// 从队列中取数据</span></span><br><span class="line">            Integer ele = queue.take();</span><br><span class="line">            System.out.println(Thread.currentThread().getName() + <span class="string">&quot; = &quot;</span> + ele);</span><br><span class="line">            Thread.sleep(<span class="number">2000</span>);</span><br><span class="line">          &#125; <span class="keyword">catch</span>(Exception e) &#123;</span><br><span class="line">            e.printStackTrace();</span><br><span class="line">          &#125;</span><br><span class="line">        &#125;</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;, <span class="string">&quot;consumer-thread&quot;</span>).start();</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="function"><span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">void</span> <span class="title">main</span><span class="params">(String[] args)</span> </span>&#123;</span><br><span class="line">    BlockQueue obj = <span class="keyword">new</span> BlockQueue();</span><br><span class="line">    obj.produce();</span><br><span class="line">    obj.consumer();</span><br><span class="line">  &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
-
-
-
-<h3 id="2-2-插入方法和移除方法组合用例"><a href="#2-2-插入方法和移除方法组合用例" class="headerlink" title="2.2 插入方法和移除方法组合用例"></a>2.2 插入方法和移除方法组合用例</h3><p>构造不同插入方法和移除方法的测试用例，看看阻塞队列的行为表现有什么不一样。添加元素的方法有 put/offer/add，移除元素的方法有 take/poll/remove，具体介绍如下。</p>
-<p>插入方法：<br></p>
-<ul>
-<li><p>put：若队列已满了则发生阻塞，等待元素加入队列。</p>
-</li>
-<li><p>offer：若发现队列已满无法添加的话，会直接返回false。</p>
-</li>
-<li><p>add：若发现队列已满直接抛出异常。</p>
-</li>
-</ul>
-<p>移除方法：<br></p>
-<ul>
-<li><p>take：若队列为空，发生阻塞，等待有元素以取出。</p>
-</li>
-<li><p>poll：若队列为空，返回null。</p>
-</li>
-<li><p>remove：若队列为空，抛出 NoSuchElementException 异常。</p>
-</li>
-</ul>
-<h4 id="2-2-1-put和take组合"><a href="#2-2-1-put和take组合" class="headerlink" title="2.2.1 put和take组合"></a>2.2.1 put和take组合</h4><p>运行结果如下：<br></p>
-<ul>
-<li>队列满时，put 方法阻塞等待队列有空闲位以添加元素；</li>
-<li>队列空时，take 方法阻塞等待队列有新元素抵达以取出元素。</li>
-</ul>
-<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 1</span><br><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 2</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 3</span><br><span class="line">queue size = 3</span><br><span class="line">consumer-thread = 4</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 5</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 6</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 7</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 8</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 9</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 10</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 11</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 12</span><br><span class="line">queue size = 3</span><br><span class="line">consumer-thread = 13</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 14</span><br><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 15</span><br><span class="line">queue size = 0</span><br><span class="line">（生产者停止生产，消费者阻塞等待中～～）</span><br></pre></td></tr></table></figure>
-
-<h4 id="2-2-2-offer和take组合"><a href="#2-2-2-offer和take组合" class="headerlink" title="2.2.2 offer和take组合"></a>2.2.2 offer和take组合</h4><p>为让 offer 添加操作效果更明显，将消费者线程 consumer 的线程等待时间调整为 4s (<code>Thread.sleep(4000)</code>)。</p>
-<p>运行结果如下：</p>
-<ul>
-<li>队列满时，offer 方法发现队列已满添加元素返回 false，元素丢弃，不添加到队列中；</li>
-<li>队列空时，take 方法阻塞等待队列有新元素抵达以取出元素。</li>
-</ul>
-<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 1</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 2</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 3</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 4</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 5</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 6</span><br><span class="line">queue size = 3</span><br><span class="line">consumer-thread = 7</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 10</span><br><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 13</span><br><span class="line">queue size = 0</span><br><span class="line">（消费者会丢失部分数据）</span><br></pre></td></tr></table></figure>
-
-<h4 id="2-2-3-add和take组合"><a href="#2-2-3-add和take组合" class="headerlink" title="2.2.3 add和take组合"></a>2.2.3 add和take组合</h4><p>运行结果如下：</p>
-<ul>
-<li>队列满时，add 方法直接抛异常，生产者无法添加元素，消费者处理完队列剩余元素；</li>
-<li>队列空时，take 方法阻塞等待队列有新元素抵达以取出元素。</li>
-</ul>
-<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 1</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 2</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 3</span><br><span class="line">queue size = 3</span><br><span class="line">consumer-thread = 4</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 5</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 6</span><br><span class="line">java.lang.IllegalStateException: Queue full</span><br></pre></td></tr></table></figure>
-
-<h4 id="2-2-4-put和poll组合"><a href="#2-2-4-put和poll组合" class="headerlink" title="2.2.4 put和poll组合"></a>2.2.4 put和poll组合</h4><p>生产者生产数据量改为 10，运行结果如下：</p>
-<ul>
-<li>队列满时，put 方法阻塞等待队列有空闲位以添加元素；</li>
-<li>队列空时，poll 方法返回 null。</li>
-</ul>
-<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 1</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 2</span><br><span class="line">queue size = 3</span><br><span class="line">consumer-thread = 3</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 4</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 5</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 6</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 7</span><br><span class="line">queue size = 3</span><br><span class="line">consumer-thread = 8</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 9</span><br><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 10</span><br><span class="line">queue size = 0</span><br><span class="line">consumer-thread = null</span><br><span class="line">queue size = 0</span><br><span class="line">consumer-thread = null</span><br></pre></td></tr></table></figure>
-
-<h4 id="2-2-5-put和remove组合"><a href="#2-2-5-put和remove组合" class="headerlink" title="2.2.5 put和remove组合"></a>2.2.5 put和remove组合</h4><p>生产者生产数据量改为 10，运行结果如下：  </p>
-<ul>
-<li><p>队列满时，put 方法阻塞等待队列有空闲位以添加元素；</p>
-</li>
-<li><p>队列空时，remove 方法抛 NoSuchElementException 异常。</p>
-</li>
-</ul>
-<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 1</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 2</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 3</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 4</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 5</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 6</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 7</span><br><span class="line">queue size = 3</span><br><span class="line">consumer-thread = 8</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 9</span><br><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 10</span><br><span class="line">queue size = 0</span><br><span class="line">java.util.NoSuchElementException</span><br></pre></td></tr></table></figure>
-
-<h3 id="2-3-小结"><a href="#2-3-小结" class="headerlink" title="2.3 小结"></a>2.3 小结</h3><p>至此，通过介绍和用例场景，对 LinkedBlockingQueue 阻塞队列的添加元素 add/put/offer 和移除元素 remove/poll/take 两类操作应该比较熟悉。简单来讲，对于有界的阻塞队列，put 和 take 组合是最完美的组合，队列满时 put 阻塞等待元素添加，队列空时 take 阻塞等待元素抵达以取出，不会出现数据丢失或抛异常的情况。</p>
-<h2 id="参考资料"><a href="#参考资料" class="headerlink" title="参考资料"></a>参考资料</h2><ul>
-<li><a href="https://juejin.cn/post/6844903640709201934">Java并发系列——阻塞队列</a></li>
-</ul>
-]]></content>
-      <categories>
-        <category>Java</category>
-      </categories>
-      <tags>
-        <tag>Java</tag>
-        <tag>数据结构</tag>
-        <tag>多线程</tag>
-      </tags>
-  </entry>
-  <entry>
-    <title>你好 CODING</title>
-    <url>/2021/11/04/hello-world/</url>
-    <content><![CDATA[<p>欢迎使用 <a href="https://help.coding.net/docs/cd/static-website-v2.html">CODING DevOps 静态网站</a> 部署 <a href="https://hexo.io/zh-cn/">Hexo</a> 应用！<br>您可以到这里查看更多的 Hexo 的 <a href="https://hexo.io/zh-cn/docs/">文档</a>。</p>
-<p>这是你的第一篇文章。</p>
-<h2 id="快速开始"><a href="#快速开始" class="headerlink" title="快速开始"></a>快速开始</h2><h3 id="新建文章"><a href="#新建文章" class="headerlink" title="新建文章"></a>新建文章</h3><figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">$ hexo new <span class="string">&quot;My New Post&quot;</span></span><br></pre></td></tr></table></figure>
-
-<p>相关帮助: <a href="https://hexo.io/zh-cn/docs/writing.html">写作</a></p>
-<h3 id="本地运行"><a href="#本地运行" class="headerlink" title="本地运行"></a>本地运行</h3><figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">$ hexo server</span><br></pre></td></tr></table></figure>
-
-<p>相关帮助: <a href="https://hexo.io/zh-cn/docs/server.html">服务器</a></p>
-<h3 id="部署到线上"><a href="#部署到线上" class="headerlink" title="部署到线上"></a>部署到线上</h3><figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">$ git add . &amp;&amp; git commit -m <span class="string">&#x27;new post&#x27;</span> &amp;&amp; git push</span><br></pre></td></tr></table></figure>
-
-]]></content>
-  </entry>
-  <entry>
     <title>好瘾与坏瘾</title>
     <url>/2021/11/02/%E5%A5%BD%E7%98%BE%E4%B8%8E%E5%9D%8F%E7%98%BE/</url>
     <content><![CDATA[<p><img src="1.jpeg" alt="好瘾与坏瘾.jpg"></p>
@@ -159,7 +126,7 @@
 <p>题图：Pixabay License</p>
 ]]></content>
       <categories>
-        <category>随笔</category>
+        <category>朝花夕拾</category>
       </categories>
   </entry>
 </search>
