@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=2">
+<meta name="theme-color" content="#222">
+<meta name="generator" content="Hexo 5.4.0">
+  <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon-next.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/images/favicon-32x32-next.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/favicon-16x16-next.png">
+  <link rel="mask-icon" href="/images/logo.svg" color="#222">
+
+<link rel="stylesheet" href="/css/main.css">
+
+<link rel="stylesheet" href="//fonts.googleapis.com/css?family=Lato:300,300italic,400,400italic,700,700italic&display=swap&subset=latin,latin-ext">
+<link rel="stylesheet" href="/lib/font-awesome/css/all.min.css">
+
+<script id="hexo-configurations">
+    var NexT = window.NexT || {};
+    var CONFIG = {"hostname":"yoursite.com","root":"/","scheme":"Gemini","version":"7.8.0","exturl":false,"sidebar":{"position":"left","display":"post","padding":18,"offset":12,"onmobile":false},"copycode":{"enable":true,"show_result":true,"style":"mac"},"back2top":{"enable":true,"sidebar":false,"scrollpercent":false},"bookmark":{"enable":false,"color":"#222","save":"auto"},"fancybox":false,"mediumzoom":false,"lazyload":false,"pangu":false,"comments":{"style":"tabs","active":null,"storage":true,"lazyload":false,"nav":null},"algolia":{"hits":{"per_page":10},"labels":{"input_placeholder":"Search for Posts","hits_empty":"We didn't find any results for the search: ${query}","hits_stats":"${hits} results found in ${time} ms"}},"localsearch":{"enable":true,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false},"motion":{"enable":true,"async":false,"transition":{"post_block":"fadeIn","post_header":"slideDownIn","post_body":"slideDownIn","coll_header":"slideLeftIn","sidebar":"slideUpIn"}},"path":"search.xml"};
+  </script>
+
+  <meta name="description" content="本文主要介绍 YARN 组件中的核心功能——资源调度，YARN 调度策略包括 FifoScheduler、FairSheduler 和 CapacityScheduler 三种，本文主要介绍 FairScheduler 的调度逻辑，看看集群的 NodeManager 是如何将资源上报给 ResourceManager（简称 RM），RM 是如何集中管理和分配这些资源，作业启动后 Applicati">
+<meta property="og:type" content="article">
+<meta property="og:title" content="YARN FairScheduler调度原理与源码分析">
+<meta property="og:url" content="http://yoursite.com/2021/11/06/YARN-FairScheduler%E8%B0%83%E5%BA%A6%E5%8E%9F%E7%90%86%E4%B8%8E%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/index.html">
+<meta property="og:site_name" content="笨小康的博客">
+<meta property="og:description" content="本文主要介绍 YARN 组件中的核心功能——资源调度，YARN 调度策略包括 FifoScheduler、FairSheduler 和 CapacityScheduler 三种，本文主要介绍 FairScheduler 的调度逻辑，看看集群的 NodeManager 是如何将资源上报给 ResourceManager（简称 RM），RM 是如何集中管理和分配这些资源，作业启动后 Applicati">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/07/b7e1bab2bb03ef9579f700d67eba79f2-1372882-20200826170350663-775889568-dd9425.png">
+<meta property="article:published_time" content="2021-11-06T14:30:45.000Z">
+<meta property="article:modified_time" content="2021-11-07T16:36:26.439Z">
+<meta property="article:author" content="笨小康">
+<meta property="article:tag" content="大数据">
+<meta property="article:tag" content="YARN">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/07/b7e1bab2bb03ef9579f700d67eba79f2-1372882-20200826170350663-775889568-dd9425.png">
+
+<link rel="canonical" href="http://yoursite.com/2021/11/06/YARN-FairScheduler%E8%B0%83%E5%BA%A6%E5%8E%9F%E7%90%86%E4%B8%8E%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/">
+
+
+<script id="page-configurations">
+  // https://hexo.io/docs/variables.html
+  CONFIG.page = {
+    sidebar: "",
+    isHome : false,
+    isPost : true,
+    lang   : 'zh-CN'
+  };
+</script>
+
+  <title>YARN FairScheduler调度原理与源码分析 | 笨小康的博客</title>
+  
+
+
+
+
+
+
+  <noscript>
+  <style>
+  .use-motion .brand,
+  .use-motion .menu-item,
+  .sidebar-inner,
+  .use-motion .post-block,
+  .use-motion .pagination,
+  .use-motion .comments,
+  .use-motion .post-header,
+  .use-motion .post-body,
+  .use-motion .collection-header { opacity: initial; }
+
+  .use-motion .site-title,
+  .use-motion .site-subtitle {
+    opacity: initial;
+    top: initial;
+  }
+
+  .use-motion .logo-line-before i { left: initial; }
+  .use-motion .logo-line-after i { right: initial; }
+  </style>
+</noscript>
+
+</head>
+
+<body itemscope itemtype="http://schema.org/WebPage">
+  <div class="container use-motion">
+    <div class="headband"></div>
+
+    <header class="header" itemscope itemtype="http://schema.org/WPHeader">
+      <div class="header-inner"><div class="site-brand-container">
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="切换导航栏">
+      <span class="toggle-line toggle-line-first"></span>
+      <span class="toggle-line toggle-line-middle"></span>
+      <span class="toggle-line toggle-line-last"></span>
+    </div>
+  </div>
+
+  <div class="site-meta">
+
+    <a href="/" class="brand" rel="start">
+      <span class="logo-line-before"><i></i></span>
+      <h1 class="site-title">笨小康的博客</h1>
+      <span class="logo-line-after"><i></i></span>
+    </a>
+      <p class="site-subtitle" itemprop="description">星辰大海, 如期而至</p>
+  </div>
+
+  <div class="site-nav-right">
+    <div class="toggle popup-trigger">
+        <i class="fa fa-search fa-fw fa-lg"></i>
+    </div>
+  </div>
+</div>
+
+
+
+
+<nav class="site-nav">
+  <ul id="menu" class="main-menu menu">
+        <li class="menu-item menu-item-home">
+
+    <a href="/" rel="section"><i class="fa fa-home fa-fw"></i>首页</a>
+
+  </li>
+        <li class="menu-item menu-item-archives">
+
+    <a href="/archives/" rel="section"><i class="fa fa-archive fa-fw"></i>归档</a>
+
+  </li>
+        <li class="menu-item menu-item-categories">
+
+    <a href="/categories/" rel="section"><i class="fa fa-th fa-fw"></i>分类</a>
+
+  </li>
+        <li class="menu-item menu-item-tags">
+
+    <a href="/tags/" rel="section"><i class="fa fa-tags fa-fw"></i>标签云</a>
+
+  </li>
+        <li class="menu-item menu-item-photography">
+
+    <a href="/categories/photography/" rel="section"><i class="fa fa-camera fa-fw"></i>摄影集</a>
+
+  </li>
+        <li class="menu-item menu-item-flomo">
+
+    <a href="/categories/flomo/" rel="section"><i class="fa fa-lightbulb fa-fw"></i>碎碎念</a>
+
+  </li>
+        <li class="menu-item menu-item-about">
+
+    <a href="/about/" rel="section"><i class="fa fa-user fa-fw"></i>关于我</a>
+
+  </li>
+      <li class="menu-item menu-item-search">
+        <a role="button" class="popup-trigger"><i class="fa fa-search fa-fw"></i>搜文章
+        </a>
+      </li>
+  </ul>
+</nav>
+
+
+
+  <div class="search-pop-overlay">
+    <div class="popup search-popup">
+        <div class="search-header">
+  <span class="search-icon">
+    <i class="fa fa-search"></i>
+  </span>
+  <div class="search-input-container">
+    <input autocomplete="off" autocapitalize="off"
+           placeholder="搜索..." spellcheck="false"
+           type="search" class="search-input">
+  </div>
+  <span class="popup-btn-close">
+    <i class="fa fa-times-circle"></i>
+  </span>
+</div>
+<div id="search-result">
+  <div id="no-result">
+    <i class="fa fa-spinner fa-pulse fa-5x fa-fw"></i>
+  </div>
+</div>
+
+    </div>
+  </div>
+
+</div>
+    </header>
+
+    
+  <div class="back-to-top">
+    <i class="fa fa-arrow-up"></i>
+    <span>0%</span>
+  </div>
+  <div class="reading-progress-bar"></div>
+
+
+    <main class="main">
+      <div class="main-inner">
+        <div class="content-wrap">
+          
+
+          <div class="content post posts-expand">
+            
+
+    
+  
+  
+  <article itemscope itemtype="http://schema.org/Article" class="post-block" lang="zh-CN">
+    <link itemprop="mainEntityOfPage" href="http://yoursite.com/2021/11/06/YARN-FairScheduler%E8%B0%83%E5%BA%A6%E5%8E%9F%E7%90%86%E4%B8%8E%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/images/avatar.gif">
+      <meta itemprop="name" content="笨小康">
+      <meta itemprop="description" content="">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="笨小康的博客">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          YARN FairScheduler调度原理与源码分析
+        </h1>
+
+        <div class="post-meta">
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-calendar"></i>
+              </span>
+              <span class="post-meta-item-text">发表于</span>
+
+              <time title="创建时间：2021-11-06 22:30:45" itemprop="dateCreated datePublished" datetime="2021-11-06T22:30:45+08:00">2021-11-06</time>
+            </span>
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-folder"></i>
+              </span>
+              <span class="post-meta-item-text">分类于</span>
+                <span itemprop="about" itemscope itemtype="http://schema.org/Thing">
+                  <a href="/categories/YARN/" itemprop="url" rel="index"><span itemprop="name">YARN</span></a>
+                </span>
+            </span>
+
+          
+            <span class="post-meta-item" title="本文字数">
+              <span class="post-meta-item-icon">
+                <i class="far fa-file-word"></i>
+              </span>
+                <span class="post-meta-item-text">本文字数：</span>
+              <span>37k</span>
+            </span>
+            <span class="post-meta-item" title="阅读时长">
+              <span class="post-meta-item-icon">
+                <i class="far fa-clock"></i>
+              </span>
+                <span class="post-meta-item-text">阅读时长 &asymp;</span>
+              <span>33 分钟</span>
+            </span>
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody">
+
+      
+        <p>本文主要介绍 YARN 组件中的核心功能——资源调度，YARN 调度策略包括 FifoScheduler、FairSheduler 和 CapacityScheduler 三种，本文主要介绍 FairScheduler 的调度逻辑，看看集群的 NodeManager 是如何将资源上报给 ResourceManager（简称 RM），RM 是如何集中管理和分配这些资源，作业启动后 ApplicationMaster 又是如何定期向 RM 申请资源，接下来我们详细分析。</p>
+<h1 id="1-YARN-资源调度方式"><a href="#1-YARN-资源调度方式" class="headerlink" title="1. YARN 资源调度方式"></a>1. YARN 资源调度方式</h1><p>资源调度方式确定了当任务提交到集群，如何为其分配资源执行任务。在 FairScheduler 中提供了两种资源调度方式：心跳调度和连续调度。</p>
+<ul>
+<li><strong>心跳调度方式：</strong>NodeManager 向 ResourceManager 汇报了自身资源情况（比如，当前可用资源，正在使用的资源，已经释放的资源)，这个 RPC 会触发 ResourceManager 调用 nodeUpdate() 方法，这个方法为这个节点进行一次资源调度，即，从维护的 Queue 中取出合适的应用的资源请求(合适 ，指的是这个资源请求既不违背队列的最大资源使用限制，也不违背这个 NodeManager 的剩余资源量限制)放到这个NodeManager上运行。这种调度方式一个主要缺点就是调度缓慢，当一个NodeManager即使已经有了剩余资源，调度也只能在心跳发送以后才会进行，不够及时。</li>
+<li><strong>连续调度方式：</strong>由一个独立的线程 ContinuousSchedulingThread 负责进行持续的资源调度，与 NodeManager 的心跳是异步进行的。即不需要等到 NodeManager 发来心跳才开始资源调度。 </li>
+</ul>
+<p>无论是 NodeManager 心跳时触发调度，还是通过 ContinuousSchedulingThread 进行实时、持续触发，他们对某个节点进行一次调度的算法和原理是公用的，都是通过 synchronized void attemptScheduling(FSSchedulerNode node) 来在某个节点上进行一次调度，方法的的参数代表了准备进行资源分配的节点。两种触发机制不同的地方只有两个：</p>
+<ul>
+<li>调度时机：心跳调度仅仅发生在收到了某个 NodeManager 的心跳信息的情况下，持续调度则不依赖与NodeManager的心跳通信，是连续发生的，当心跳到来，会将调度结果直接返回给 NodeManager；</li>
+<li>调度范围：心跳调度机制下，当收到某个节点的心跳，就对这个节点且仅仅对这个节点进行一次调度，即谁的心跳到来就触发对谁的调度，而持续调度的每一轮，是会遍历当前集群的所有节点，每个节点依次进行一次调度，保证一轮下来每一个节点都被公平的调度一次；</li>
+</ul>
+<p>在集群环境中，连续调度默认不开启，只有设置 YARN.scheduler.fair.continuous-scheduling-enabled 参数为 true，才会启动该线程。连续调度现在已经不推荐了，因为它会因为锁的问题，而导致资源调度变得缓慢。可以使用 YARN.scheduler.assignmultiple 参数启动批量分配功能，作为连续调度的替代。</p>
+<h1 id="2-YARN-调度流程"><a href="#2-YARN-调度流程" class="headerlink" title="2. YARN 调度流程"></a>2. YARN 调度流程</h1><p>本文的调度流程主要介绍心跳调度的方式，下图是 YARN 心跳调度的主要流程。</p>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/07/b7e1bab2bb03ef9579f700d67eba79f2-1372882-20200826170350663-775889568-dd9425.png" alt="img"></p>
+<center>YARN 调度流程图</center>
+
+<h2 id="2-1-名词解释"><a href="#2-1-名词解释" class="headerlink" title="2.1 名词解释"></a>2.1 名词解释</h2><ul>
+<li>ResrouceSacheduler 是YARN 的调度器，负责 Container 的分配。下面主要是以 FairScheduler 调度器为例。</li>
+<li>AsyncDispatcher 是单线程的事件分发器，负责向调度器发送调度事件。</li>
+<li>ResourceTrackerService 是资源跟踪器，主要负责接收处理 NodeManager 的心跳信息。</li>
+<li>ApplicationMasterService 是作业的 RPC 服务，主要负责接收处理作业的心跳信息。</li>
+<li>AppMaster 是作业的程序控制器，负责跟 YARN 交互获取/释放资源。</li>
+</ul>
+<h2 id="2-2-调度流程"><a href="#2-2-调度流程" class="headerlink" title="2.2 调度流程"></a>2.2 调度流程</h2><p>YARN 的资源调度是异步进行的，NM 心跳发生时，调度器 ResourceScheduler 根据作业需求将 Container 资源分配给作业后，不会立即通知 AM，而是等待 AM 注册后通过心跳方式来主动获取。YARN 的整个调度流程可以概括为以下几个步骤：</p>
+<ol>
+<li>NM 节点通过心跳方式向 RM 汇报节点资源信息（包括当前可用资源、正在使用的资源、已经释放的资源)。</li>
+<li>ResourceTrackerService 服务收到 NM 的心跳事件，将 NODE_UPDATE 事件交给 中央调度器 AsyncDispatcher 处理；</li>
+<li>AsyncDispatcher 根据事件类型将请求转发给 ResourceScheduler 处理，ResourceScheduler 则按照一定的调度策略（队列层级调度）将 NM 的资源分配到 Container，并将 Container 保存在数据结构中；</li>
+<li>ResourceScheduler 针对作业分配的第一个 Container 用于启动作业的 AM 进程；</li>
+<li>AM 启动后，通过 ApplicationMasterService 定期向 RM 发生资源请求心跳，领取之前记录在 RM 中分配给自己的 Container 资源；</li>
+<li>AM 向 NM 发送启动 Container 的命令，将收到的 Container 在 NM 上启动执行。</li>
+</ol>
+<p>其中，YARN 分配策略确定了在 NM 发生心跳时，如何在所有队列中选择合适的 APP 资源请求以为其分配资源。从上图队列层级结构可以看出一次 Container 的分配流程：每次分配从 root 节点开始，先从队列中选择合适的叶子队列，然后从队列的 APP 中选择合适的 APP，最后选择出该 APP 中合适的 Container 为其分配资源执行任务，选择过程如下：</p>
+<ul>
+<li><strong>选择队列 （排序）。</strong>从根队列开始，使用深度优先遍历算法，从根队列开始，依次遍历子队列找出资源占用率最小的子队列。若子队列为叶子队列，则选择该队列；若子队列为非叶子队列，则以该子队列为根队列重复前面的过程直到找到一个资源使用率最小的叶子队列为止。</li>
+<li><strong>选择应用</strong> <strong>（排序）。</strong>在Step1中选好了叶子队列后，取该队列中排序最靠前的应用程序（排序逻辑可以根据应用程序的资源请求量、提交时间、作业名）。</li>
+<li><strong>选择 Container （排序）。</strong>在 Step2中选好应用程序之后，选择该应用程序中优先级最高的 Container。对于优先级相同的 Containers，优选选择满足本地性的 Container，会依次选择 node local、rack local、no local。</li>
+</ul>
+<h1 id="3-FairScheduler-资源分配"><a href="#3-FairScheduler-资源分配" class="headerlink" title="3. FairScheduler 资源分配"></a>3. FairScheduler 资源分配</h1><h2 id="3-1-NM-心跳上报"><a href="#3-1-NM-心跳上报" class="headerlink" title="3.1 NM 心跳上报"></a>3.1 NM 心跳上报</h2><p>NM 中负责心跳的类是 NodeStatusUpdater 类型的成员变量 nodeStatusUpdater，在 NM 调用 serviceInit() 方法时被创建：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//代码：org/apache/hadoop/yarn/server/nodemanager/NodeManager.java</span></span><br><span class="line">  <span class="function"><span class="keyword">protected</span> <span class="keyword">void</span> <span class="title">serviceInit</span><span class="params">(Configuration conf)</span> <span class="keyword">throws</span> Exception </span>&#123;</span><br><span class="line">    ...  <span class="comment">// 省略</span></span><br><span class="line">    nodeStatusUpdater =</span><br><span class="line">        createNodeStatusUpdater(context, dispatcher, nodeHealthChecker);</span><br><span class="line">    ...  <span class="comment">// 省略</span></span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="function"><span class="keyword">protected</span> NodeStatusUpdater <span class="title">createNodeStatusUpdater</span><span class="params">(Context context,</span></span></span><br><span class="line"><span class="params"><span class="function">      Dispatcher dispatcher, NodeHealthCheckerService healthChecker)</span> </span>&#123;</span><br><span class="line">    <span class="keyword">return</span> <span class="keyword">new</span> NodeStatusUpdaterImpl(context, dispatcher, healthChecker,</span><br><span class="line">      metrics);</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>nodeStatusUpdater 在创建时初始化实例 NodeStatusUpdaterImpl，它是真正负责与 RM 通讯的类，其中 serviceStart() 方法中会进行 NM 注册和心跳。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/nodemanager/NodeStatusUpdaterImpl.java</span></span><br><span class="line">  <span class="meta">@Override</span></span><br><span class="line">  <span class="function"><span class="keyword">protected</span> <span class="keyword">void</span> <span class="title">serviceStart</span><span class="params">()</span> <span class="keyword">throws</span> Exception </span>&#123;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// NodeManager is the last service to start, so NodeId is available.</span></span><br><span class="line">    <span class="keyword">this</span>.nodeId = <span class="keyword">this</span>.context.getNodeId();</span><br><span class="line">    <span class="keyword">this</span>.httpPort = <span class="keyword">this</span>.context.getHttpPort();</span><br><span class="line">    <span class="keyword">this</span>.nodeManagerVersionId = YARNVersionInfo.getVersion();</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">      <span class="comment">// Registration has to be in start so that ContainerManager can get the</span></span><br><span class="line">      <span class="comment">// perNM tokens needed to authenticate ContainerTokens.</span></span><br><span class="line">      <span class="keyword">this</span>.resourceTracker = getRMClient();</span><br><span class="line">      registerWithRM();         <span class="comment">// NM向RM注册</span></span><br><span class="line">      <span class="keyword">super</span>.serviceStart();</span><br><span class="line">      startStatusUpdater();     <span class="comment">// 独立线程进行NM心跳上报</span></span><br><span class="line">    &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">      String errorMessage = <span class="string">&quot;Unexpected error starting NodeStatusUpdater&quot;</span>;</span><br><span class="line">      LOG.error(errorMessage, e);</span><br><span class="line">      <span class="keyword">throw</span> <span class="keyword">new</span> YARNRuntimeException(e);</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>NM 向 RM 注册逻辑直接跳过，重点看一下心跳逻辑，首先启动心跳线程：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/nodemanager/NodeStatusUpdaterImpl.java</span></span><br><span class="line">  <span class="function"><span class="keyword">protected</span> <span class="keyword">void</span> <span class="title">startStatusUpdater</span><span class="params">()</span> </span>&#123;</span><br><span class="line">    statusUpdaterRunnable = <span class="keyword">new</span> Runnable() &#123; ... &#125;;</span><br><span class="line">    statusUpdater =</span><br><span class="line">        <span class="keyword">new</span> Thread(statusUpdaterRunnable, <span class="string">&quot;Node Status Updater&quot;</span>);</span><br><span class="line">    statusUpdater.start();</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>接着来看看 statusUpdaterRunnable 线程如何进行心跳上报：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/nodemanager/NodeStatusUpdaterImpl.java</span></span><br><span class="line">    statusUpdaterRunnable = <span class="keyword">new</span> Runnable() &#123;</span><br><span class="line">      <span class="meta">@Override</span></span><br><span class="line">      <span class="meta">@SuppressWarnings(&quot;unchecked&quot;)</span></span><br><span class="line">      <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">run</span><span class="params">()</span> </span>&#123;</span><br><span class="line">        <span class="keyword">int</span> lastHeartBeatID = <span class="number">0</span>;</span><br><span class="line">        <span class="keyword">while</span> (!isStopped) &#123;    <span class="comment">// 在被终止前死循环的跑</span></span><br><span class="line">          <span class="comment">// Send heartbeat</span></span><br><span class="line">          <span class="keyword">try</span> &#123;</span><br><span class="line">            NodeHeartbeatResponse response = <span class="keyword">null</span>;</span><br><span class="line">            NodeStatus nodeStatus = getNodeStatus(lastHeartBeatID);</span><br><span class="line">            </span><br><span class="line">            <span class="comment">// 构建 request 请求信息</span></span><br><span class="line">            NodeHeartbeatRequest request =</span><br><span class="line">                NodeHeartbeatRequest.newInstance(nodeStatus,</span><br><span class="line">                  NodeStatusUpdaterImpl.<span class="keyword">this</span>.context</span><br><span class="line">                    .getContainerTokenSecretManager().getCurrentKey(),</span><br><span class="line">                  NodeStatusUpdaterImpl.<span class="keyword">this</span>.context.getNMTokenSecretManager()</span><br><span class="line">                    .getCurrentKey());</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 重点：这里向 RM 发送心跳 RPC 请求，并得到返回结果 response</span></span><br><span class="line">            response = resourceTracker.nodeHeartbeat(request);</span><br><span class="line">            <span class="comment">//get next heartbeat interval from response</span></span><br><span class="line">            nextHeartBeatInterval = response.getNextHeartBeatInterval();</span><br><span class="line">            updateMasterKeys(response);</span><br><span class="line"></span><br><span class="line">            <span class="keyword">if</span> (response.getNodeAction() == NodeAction.SHUTDOWN) &#123;</span><br><span class="line">              <span class="comment">// 处理 RM 返回的结果，包括停止运行和重新注册</span></span><br><span class="line">            &#125;</span><br><span class="line">            ...  <span class="comment">// 省略</span></span><br><span class="line">          &#125;</span><br><span class="line">        &#125;</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;;</span><br></pre></td></tr></table></figure>
+
+<p>至此，NM 已经通过 NodeStatusUpdaterImpl 类向 RM 发送了心跳请求，那 RM 又如何处理该心跳请求呢？我们接着分析。</p>
+<h2 id="3-2-RM-接收心跳"><a href="#3-2-RM-接收心跳" class="headerlink" title="3.2 RM 接收心跳"></a>3.2 RM 接收心跳</h2><p>NM 与 RM 通讯的接口是通过 ResourceTrackerService 服务来实现。直接来看看 NM 调用 nodeHeartbeat() 方法发送过来的请求。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/resourcemanager/ResourceTrackerService.java</span></span><br><span class="line">  <span class="meta">@Override</span></span><br><span class="line">  <span class="function"><span class="keyword">public</span> NodeHeartbeatResponse <span class="title">nodeHeartbeat</span><span class="params">(NodeHeartbeatRequest request)</span></span></span><br><span class="line"><span class="function">      <span class="keyword">throws</span> YARNException, IOException </span>&#123;</span><br><span class="line"></span><br><span class="line">    NodeStatus remoteNodeStatus = request.getNodeStatus();</span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 处理心跳的流程：</span></span><br><span class="line"><span class="comment">     * 1. 判断是否是合法的 node（即是否被拉黑过）</span></span><br><span class="line"><span class="comment">     * 2. 判断是否是一个注册过的 node</span></span><br><span class="line"><span class="comment">     * 3. 判断这个心跳是否是重复的心跳</span></span><br><span class="line"><span class="comment">     * 4. 发送 NM 的状态给 RMNodeStatusEvent 事件处理器</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line"></span><br><span class="line">    ... <span class="comment">// 1-3 步跳过</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">// 4. Send status to RMNode, saving the latest response.</span></span><br><span class="line">    RMNodeStatusEvent nodeStatusEvent =</span><br><span class="line">        <span class="keyword">new</span> RMNodeStatusEvent(nodeId, remoteNodeStatus.getNodeHealthStatus(),</span><br><span class="line">          remoteNodeStatus.getContainersStatuses(),</span><br><span class="line">          remoteNodeStatus.getKeepAliveApplications(), nodeHeartBeatResponse);</span><br><span class="line">    <span class="keyword">if</span> (request.getLogAggregationReportsForApps() != <span class="keyword">null</span></span><br><span class="line">        &amp;&amp; !request.getLogAggregationReportsForApps().isEmpty()) &#123;</span><br><span class="line">      nodeStatusEvent.setLogAggregationReportsForApps(request</span><br><span class="line">        .getLogAggregationReportsForApps());</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">this</span>.rmContext.getDispatcher().getEventHandler().handle(nodeStatusEvent);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">return</span> nodeHeartBeatResponse;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>心跳处理过程的关键是第 4 步，它会通过中央调度器 AsyncDispatcher 向 RM 发送 RMNodeStatusEvent 事件，那这个事件是由谁来处理的呢？在 YARN 这种事件处理逻辑很常见，关键点是要看事件对应的处理器是如何注册的。上面的 RMNodeStatusEvent 事件处理器继承自 RMNodeEvent，在 RM 的注册处理器代码如下。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/resourcemanager/ResourceManager.java</span></span><br><span class="line">      <span class="comment">// Register event handler for RmNodes</span></span><br><span class="line">      rmDispatcher.register(</span><br><span class="line">          RMNodeEventType.class, <span class="keyword">new</span> NodeEventDispatcher(rmContext));</span><br></pre></td></tr></table></figure>
+
+<p>其中 RMNodeStatusEvent 事件是交由 NodeEventDispatcher 调度器处理，处理的 handle() 方法如下：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/resourcemanager/ResourceManager.java</span></span><br><span class="line">    <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">handle</span><span class="params">(RMNodeEvent event)</span> </span>&#123;</span><br><span class="line">      NodeId nodeId = event.getNodeId();</span><br><span class="line">      RMNode node = <span class="keyword">this</span>.rmContext.getRMNodes().get(nodeId);</span><br><span class="line">      <span class="keyword">if</span> (node != <span class="keyword">null</span>) &#123;</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">          ((EventHandler&lt;RMNodeEvent&gt;) node).handle(event);</span><br><span class="line">        &#125; <span class="keyword">catch</span> (Throwable t) &#123;</span><br><span class="line">          LOG.error(<span class="string">&quot;Error in handling event type &quot;</span> + event.getType()</span><br><span class="line">              + <span class="string">&quot; for node &quot;</span> + nodeId, t);</span><br><span class="line">        &#125;</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br></pre></td></tr></table></figure>
+
+<p>这里会调用 RMNode 的handle() 方法，RMNode 是一个接口类，实现类为 RMNodeImpl，对应 handle() 方法如下：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/resourcemanager/rmnode/RMNodeImpl.java</span></span><br><span class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">handle</span><span class="params">(RMNodeEvent event)</span> </span>&#123;</span><br><span class="line">  LOG.debug(<span class="string">&quot;Processing &quot;</span> + event.getNodeId() + <span class="string">&quot; of type &quot;</span> + event.getType());</span><br><span class="line">  <span class="keyword">try</span> &#123;</span><br><span class="line">    writeLock.lock();</span><br><span class="line">    NodeState oldState = getState();</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">       stateMachine.doTransition(event.getType(), event);</span><br><span class="line">    &#125; <span class="keyword">catch</span> (InvalidStateTransitonException e) &#123;</span><br><span class="line">      LOG.error(<span class="string">&quot;Can&#x27;t handle this event at current state&quot;</span>, e);</span><br><span class="line">      LOG.error(<span class="string">&quot;Invalid event &quot;</span> + event.getType() + </span><br><span class="line">          <span class="string">&quot; on Node  &quot;</span> + <span class="keyword">this</span>.nodeId);</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">if</span> (oldState != getState()) &#123;</span><br><span class="line">      LOG.info(nodeId + <span class="string">&quot; Node Transitioned from &quot;</span> + oldState + <span class="string">&quot; to &quot;</span></span><br><span class="line">               + getState());</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line">  </span><br><span class="line">  <span class="keyword">finally</span> &#123;</span><br><span class="line">    writeLock.unlock();</span><br><span class="line">  &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这里就涉及到 RMNodeImpl 的状态机，由于 RMNodeStatusEvent 事件类型是 RMNodeEventType.STATUS_UPDATE，状态机中对这个事件的处理有三种情况：</p>
+<ul>
+<li>从 RUNNING 到 RUNNING、UNHEALTHY，调用 StatusUpdateWhenHealthyTransition；</li>
+<li>从 DECOMMISSIONING 到 DECOMMISSIONING、DECOMMISSIONED，调用 StatusUpdateWhenHealthyTransition；</li>
+<li>从 UNHEALTHY 到 UNHEALTHY、RUNNING，调用 StatusUpdateWhenUnHealthyTransition；</li>
+</ul>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/resourcemanager/rmnode/RMNodeImpl.java</span></span><br><span class="line">      <span class="comment">//Transitions from RUNNING state</span></span><br><span class="line">      .addTransition(NodeState.RUNNING,</span><br><span class="line">          EnumSet.of(NodeState.RUNNING, NodeState.UNHEALTHY),</span><br><span class="line">          RMNodeEventType.STATUS_UPDATE,</span><br><span class="line">          <span class="keyword">new</span> StatusUpdateWhenHealthyTransition())</span><br><span class="line">      <span class="comment">//Transitions from DECOMMISSIONING state</span></span><br><span class="line">      .addTransition(NodeState.DECOMMISSIONING,</span><br><span class="line">          EnumSet.of(NodeState.DECOMMISSIONING, NodeState.DECOMMISSIONED),</span><br><span class="line">          RMNodeEventType.STATUS_UPDATE,</span><br><span class="line">          <span class="keyword">new</span> StatusUpdateWhenHealthyTransition())</span><br><span class="line">      <span class="comment">//Transitions from UNHEALTHY state</span></span><br><span class="line">      .addTransition(NodeState.UNHEALTHY,</span><br><span class="line">          EnumSet.of(NodeState.UNHEALTHY, NodeState.RUNNING),</span><br><span class="line">          RMNodeEventType.STATUS_UPDATE,</span><br><span class="line">          <span class="keyword">new</span> StatusUpdateWhenUnHealthyTransition())</span><br></pre></td></tr></table></figure>
+
+<p>这里选择最常见的状态转换，从 RUNNING 到 RUNNING，查看被调用的 StatusUpdateWhenHealthyTransition 状态机的 transition() 方法：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/resourcemanager/rmnode/RMNodeImpl.java</span></span><br><span class="line">    <span class="function"><span class="keyword">public</span> NodeState <span class="title">transition</span><span class="params">(RMNodeImpl rmNode, RMNodeEvent event)</span> </span>&#123;</span><br><span class="line"></span><br><span class="line">      RMNodeStatusEvent statusEvent = (RMNodeStatusEvent) event;</span><br><span class="line"></span><br><span class="line">      <span class="comment">// Switch the last heartbeatresponse.</span></span><br><span class="line">      rmNode.latestNodeHeartBeatResponse = statusEvent.getLatestResponse();</span><br><span class="line"></span><br><span class="line">      NodeHealthStatus remoteNodeHealthStatus =</span><br><span class="line">          statusEvent.getNodeHealthStatus();</span><br><span class="line">      rmNode.setHealthReport(remoteNodeHealthStatus.getHealthReport());</span><br><span class="line">      rmNode.setLastHealthReportTime(</span><br><span class="line">          remoteNodeHealthStatus.getLastHealthReportTime());</span><br><span class="line">      NodeState initialState = rmNode.getState();</span><br><span class="line">      <span class="keyword">boolean</span> isNodeDecommissioning =</span><br><span class="line">          initialState.equals(NodeState.DECOMMISSIONING);</span><br><span class="line">      </span><br><span class="line">      ... <span class="comment">// 跳过 unhealthy 和 decommsission 的判断逻辑</span></span><br><span class="line"></span><br><span class="line">      rmNode.handleContainerStatus(statusEvent.getContainers());</span><br><span class="line"></span><br><span class="line">      List&lt;LogAggregationReport&gt; logAggregationReportsForApps =</span><br><span class="line">          statusEvent.getLogAggregationReportsForApps();</span><br><span class="line">      <span class="keyword">if</span> (logAggregationReportsForApps != <span class="keyword">null</span></span><br><span class="line">          &amp;&amp; !logAggregationReportsForApps.isEmpty()) &#123;</span><br><span class="line">        rmNode.handleLogAggregationStatus(logAggregationReportsForApps);</span><br><span class="line">      &#125;</span><br><span class="line"></span><br><span class="line">      <span class="keyword">if</span>(rmNode.nextHeartBeat) &#123;</span><br><span class="line">        rmNode.nextHeartBeat = <span class="keyword">false</span>;</span><br><span class="line">        <span class="comment">// 重点：向 RM 发送一个 NodeUpdateSchedulerEvent 事件</span></span><br><span class="line">        rmNode.context.getDispatcher().getEventHandler().handle(</span><br><span class="line">            <span class="keyword">new</span> NodeUpdateSchedulerEvent(rmNode));</span><br><span class="line">      &#125;</span><br><span class="line"></span><br><span class="line">      <span class="comment">// Update DTRenewer in secure mode to keep these apps alive. Today this is</span></span><br><span class="line">      <span class="comment">// needed for log-aggregation to finish long after the apps are gone.</span></span><br><span class="line">      <span class="keyword">if</span> (UserGroupInformation.isSecurityEnabled()) &#123;</span><br><span class="line">        rmNode.context.getDelegationTokenRenewer().updateKeepAliveApplications(</span><br><span class="line">          statusEvent.getKeepAliveAppIds());</span><br><span class="line">      &#125;</span><br><span class="line"></span><br><span class="line">      <span class="keyword">return</span> initialState;</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>这里关键的逻辑是向 RM 发送了一个 NodeUpdateSchedulerEvent 事件，那这个事件又是谁处理的呢？NodeUpdateSchedulerEvent 继承自 SchedulerEvent，SchedulerEvent在RM中注册的处理器如下：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/resourcemanager/ResourceManager.java</span></span><br><span class="line">  <span class="comment">// 注册 SchedulerEventDispatcher</span></span><br><span class="line">  schedulerDispatcher = createSchedulerEventDispatcher();</span><br><span class="line">  addIfService(schedulerDispatcher);</span><br><span class="line">  rmDispatcher.register(SchedulerEventType.class, schedulerDispatcher);</span><br><span class="line">  </span><br><span class="line">  <span class="comment">// 注册方法</span></span><br><span class="line">  <span class="function"><span class="keyword">protected</span> EventHandler&lt;SchedulerEvent&gt; <span class="title">createSchedulerEventDispatcher</span><span class="params">()</span> </span>&#123;</span><br><span class="line">    <span class="keyword">return</span> <span class="keyword">new</span> SchedulerEventDispatcher(<span class="keyword">this</span>.scheduler);</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>其中 scheduler 对象是根据配置 YARN.resourcemanager.YARN.resourcemanager 指定的类生成的对象，这里使用 org.apache.hadoop.YARN.server.resourcemanager.scheduler.fair.FairScheduler。那就进入到 FairScheduler 的 handle() 方法，这里只看 NODE_UPDATE 事件的处理逻辑，其他的先省略。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FairScheduler.java</span></span><br><span class="line">  <span class="meta">@Override</span></span><br><span class="line">  <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">handle</span><span class="params">(SchedulerEvent event)</span> </span>&#123;</span><br><span class="line">    <span class="keyword">long</span> start = getClock().getTime();</span><br><span class="line">    <span class="keyword">switch</span> (event.getType()) &#123;</span><br><span class="line">    <span class="keyword">case</span> NODE_ADDED:  <span class="comment">// 省略</span></span><br><span class="line">    <span class="keyword">case</span> NODE_REMOVED: <span class="comment">// 省略</span></span><br><span class="line">    <span class="keyword">case</span> NODE_UPDATE:</span><br><span class="line">      <span class="keyword">if</span> (!(event <span class="keyword">instanceof</span> NodeUpdateSchedulerEvent)) &#123;</span><br><span class="line">        <span class="keyword">throw</span> <span class="keyword">new</span> RuntimeException(<span class="string">&quot;Unexpected event type: &quot;</span> + event);</span><br><span class="line">      &#125;</span><br><span class="line">      NodeUpdateSchedulerEvent nodeUpdatedEvent = (NodeUpdateSchedulerEvent)event;</span><br><span class="line">      nodeUpdate(nodeUpdatedEvent.getRMNode());</span><br><span class="line">      fsOpDurations.addHandleNodeUpdateEventDuration(getClock().getTime() - start);</span><br><span class="line">      <span class="keyword">break</span>;</span><br><span class="line">    <span class="keyword">case</span> APP_ADDED: <span class="comment">// 省略</span></span><br><span class="line">    <span class="keyword">case</span> APP_REMOVED: <span class="comment">// 省略</span></span><br><span class="line">    <span class="keyword">case</span> NODE_RESOURCE_UPDATE: <span class="comment">// 省略</span></span><br><span class="line">    <span class="keyword">case</span> APP_ATTEMPT_ADDED: <span class="comment">// 省略</span></span><br><span class="line">    <span class="keyword">case</span> APP_ATTEMPT_REMOVED: <span class="comment">// 省略</span></span><br><span class="line">    <span class="keyword">case</span> CONTAINER_EXPIRED: <span class="comment">// 省略</span></span><br><span class="line">    <span class="keyword">case</span> CONTAINER_RESCHEDULED: <span class="comment">// 省略</span></span><br><span class="line">    <span class="keyword">default</span>:</span><br><span class="line">      LOG.error(<span class="string">&quot;Unknown event arrived at FairScheduler: &quot;</span> + event.toString());</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>由于 NM 的心跳事件是 RMNodeEventType.STATUS_UPDATE，可以得知这里处理的事件类型为 SchedulerEventType.NODE_UPDATE，进入NODE_UPDATE处理逻辑。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FairScheduler.java</span></span><br><span class="line"><span class="function"><span class="keyword">private</span> <span class="keyword">void</span> <span class="title">nodeUpdate</span><span class="params">(RMNode nm)</span> </span>&#123;</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">      writeLock.lock();</span><br><span class="line">      <span class="keyword">long</span> start = getClock().getTime();</span><br><span class="line">      <span class="keyword">if</span> (LOG.isDebugEnabled()) &#123;</span><br><span class="line">        LOG.debug(<span class="string">&quot;nodeUpdate: &quot;</span> + nm +</span><br><span class="line">            <span class="string">&quot; cluster capacity: &quot;</span> + getClusterResource());</span><br><span class="line">      &#125;</span><br><span class="line">      eventLog.log(<span class="string">&quot;HEARTBEAT&quot;</span>, nm.getHostName());</span><br><span class="line">      FSSchedulerNode node = getFSSchedulerNode(nm.getNodeID());</span><br><span class="line"></span><br><span class="line">      <span class="comment">// Containe 状态更新：处理新运行或者运行完成的 Container</span></span><br><span class="line"></span><br><span class="line">      <span class="comment">// 判断 NM 是否是 DECOMMISSIONING 状态</span></span><br><span class="line"></span><br><span class="line">      <span class="comment">// 核心调度入口，无论是否开启连续调度入口都是 attemptScheduling(node) 方法</span></span><br><span class="line">      <span class="keyword">if</span> (continuousSchedulingEnabled) &#123;</span><br><span class="line">        <span class="keyword">if</span> (!completedContainers.isEmpty()) &#123;</span><br><span class="line">          attemptScheduling(node);</span><br><span class="line">        &#125;</span><br><span class="line">      &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        attemptScheduling(node);</span><br><span class="line">      &#125;</span><br><span class="line"></span><br><span class="line">      <span class="keyword">long</span> duration = getClock().getTime() - start;</span><br><span class="line">      fsOpDurations.addNodeUpdateDuration(duration);</span><br><span class="line">    &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">      writeLock.unlock();</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>看看核心调度入口，这里获取了一个 FSSchedulerNode 实例，并尝试进行调度。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FairScheduler.java</span></span><br><span class="line">  <span class="function"><span class="keyword">synchronized</span> <span class="keyword">void</span> <span class="title">attemptScheduling</span><span class="params">(FSSchedulerNode node)</span> </span>&#123;</span><br><span class="line">    <span class="comment">// 检查是否是有效的 node</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">// Assign new containers...</span></span><br><span class="line">    <span class="comment">// 1. 检查是否有资源预留的应用</span></span><br><span class="line">    <span class="comment">// 2. 没有预留则进行调度分配新的 Container</span></span><br><span class="line"></span><br><span class="line">    <span class="keyword">boolean</span> validReservation = <span class="keyword">false</span>;</span><br><span class="line">    FSAppAttempt reservedAppSchedulable = node.getReservedAppSchedulable();</span><br><span class="line">    <span class="keyword">if</span> (reservedAppSchedulable != <span class="keyword">null</span>) &#123;</span><br><span class="line">      validReservation = reservedAppSchedulable.assignReservedContainer(node);</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">if</span> (!validReservation) &#123;</span><br><span class="line">      <span class="comment">// No reservation, schedule at queue which is farthest below fair share</span></span><br><span class="line">      <span class="keyword">int</span> assignedContainers = <span class="number">0</span>;</span><br><span class="line">      Resource assignedResource = Resources.clone(Resources.none());</span><br><span class="line">      Resource maxResourcesToAssign =</span><br><span class="line">          Resources.multiply(node.getAvailableResource(), <span class="number">0.5f</span>);</span><br><span class="line">      <span class="keyword">while</span> (node.getReservedContainer() == <span class="keyword">null</span>) &#123;</span><br><span class="line">        <span class="keyword">boolean</span> assignedContainer = <span class="keyword">false</span>;</span><br><span class="line">        <span class="comment">// 重点：核心分配逻辑开始，从 ROOT 队列开始调度</span></span><br><span class="line">        Resource assignment = queueMgr.getRootQueue().assignContainer(node);</span><br><span class="line">        <span class="keyword">if</span> (!assignment.equals(Resources.none())) &#123;</span><br><span class="line">          assignedContainers++;</span><br><span class="line">          assignedContainer = <span class="keyword">true</span>;</span><br><span class="line">          Resources.addTo(assignedResource, assignment);</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">if</span> (!assignedContainer) &#123; <span class="keyword">break</span>; &#125;</span><br><span class="line">        <span class="keyword">if</span> (!shouldContinueAssigning(assignedContainers,</span><br><span class="line">            maxResourcesToAssign, assignedResource)) &#123;</span><br><span class="line">          <span class="keyword">break</span>;</span><br><span class="line">        &#125;</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    updateRootQueueMetrics();</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>分配 Container 是从 ROOT 队列开始，这里调用 queueMgr.getRootQueue() 方法找到 ROOT 队列，然后调用 assignContainer(node) 方法。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FSParentQueue.java</span></span><br><span class="line">  <span class="meta">@Override</span></span><br><span class="line">  <span class="function"><span class="keyword">public</span> Resource <span class="title">assignContainer</span><span class="params">(FSSchedulerNode node)</span> </span>&#123;</span><br><span class="line">    Resource assigned = Resources.none();</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 如果超过了队列的 maxShare 则直接返回</span></span><br><span class="line">    <span class="keyword">if</span> (!assignContainerPreCheck(node)) &#123;</span><br><span class="line">      <span class="keyword">return</span> assigned;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    TreeSet&lt;FSQueue&gt; sortedChildQueues = <span class="keyword">new</span> TreeSet&lt;&gt;(policy.getComparator());</span><br><span class="line"></span><br><span class="line">    <span class="comment">/*</span></span><br><span class="line"><span class="comment">     * 这里对所有叶子队列进行排序，有两个情况需要考虑下：</span></span><br><span class="line"><span class="comment">     * 1. 新增加一个 queue，不影响结果的正确性，下次会处理新 queue</span></span><br><span class="line"><span class="comment">     * 2. 删除一个 queue，最好处理一下以不对该 queue 进行分配，不过目前没有处理，也没有影响</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    readLock.lock();</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">        sortedChildQueues.addAll(childQueues);</span><br><span class="line">        <span class="keyword">for</span> (FSQueue child : sortedChildQueues) &#123;</span><br><span class="line">        assigned = child.assignContainer(node);</span><br><span class="line">        <span class="keyword">if</span> (!Resources.equals(assigned, Resources.none())) &#123;</span><br><span class="line">          <span class="keyword">break</span>;</span><br><span class="line">        &#125;</span><br><span class="line">      &#125;</span><br><span class="line">    &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">      readLock.unlock();</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> assigned;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>这里是 FSParentQueue 父队列的 assignContainer() 逻辑，对所有孩子节点进行遍历，递归调用该该方法，调用过程有两种情况：</p>
+<ul>
+<li>如果孩子节点是 FSParentQueue 父队列，则递归进入 FSParentQueue 类相同的逻辑中。</li>
+<li>如果孩子节点是 FSLeafQueue 叶子队列，则进入到下一步的调用逻辑。</li>
+</ul>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FSLeafQueue.java</span></span><br><span class="line">  <span class="meta">@Override</span></span><br><span class="line">  <span class="function"><span class="keyword">public</span> Resource <span class="title">assignContainer</span><span class="params">(FSSchedulerNode node)</span> </span>&#123;</span><br><span class="line">    Resource assigned = none();</span><br><span class="line">    <span class="keyword">if</span> (LOG.isDebugEnabled()) &#123;</span><br><span class="line">      LOG.debug(<span class="string">&quot;Node &quot;</span> + node.getNodeName() + <span class="string">&quot; offered to queue: &quot;</span> +</span><br><span class="line">          getName() + <span class="string">&quot; fairShare: &quot;</span> + getFairShare());</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 检查是否超过队列的 maxShare 限制</span></span><br><span class="line">    <span class="keyword">if</span> (!assignContainerPreCheck(node)) &#123;</span><br><span class="line">      <span class="keyword">return</span> assigned;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 遍历叶子节点所有有资源需求的 APP，并对其尝试分配 Container</span></span><br><span class="line">    <span class="keyword">for</span> (FSAppAttempt sched : fetchAppsWithDemand(<span class="keyword">true</span>)) &#123;</span><br><span class="line">      <span class="keyword">if</span> (SchedulerAppUtils.isBlacklisted(sched, node, LOG)) &#123;</span><br><span class="line">        <span class="keyword">continue</span>;</span><br><span class="line">      &#125;</span><br><span class="line">      assigned = sched.assignContainer(node);</span><br><span class="line">      <span class="keyword">if</span> (!assigned.equals(none())) &#123;</span><br><span class="line">        <span class="keyword">if</span> (LOG.isDebugEnabled()) &#123;</span><br><span class="line">          LOG.debug(<span class="string">&quot;Assigned container in queue:&quot;</span> + getName() + <span class="string">&quot; &quot;</span> +</span><br><span class="line">              <span class="string">&quot;container:&quot;</span> + assigned);</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">break</span>;</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> assigned;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>这里获取叶子节点的 APP 调用了 fetchAppsWithDemand() 方法，该方法主要是对该队列所有 APP 进行遍历，找到真正有资源需求的 APP，过滤掉没有资源的 APP。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FSLeafQueue.java</span></span><br><span class="line">  <span class="function"><span class="keyword">private</span> TreeSet&lt;FSAppAttempt&gt; <span class="title">fetchAppsWithDemand</span><span class="params">(<span class="keyword">boolean</span> assignment)</span> </span>&#123;</span><br><span class="line">    TreeSet&lt;FSAppAttempt&gt; pendingForResourceApps =</span><br><span class="line">        <span class="keyword">new</span> TreeSet&lt;&gt;(policy.getComparator());</span><br><span class="line">    readLock.lock();</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">      <span class="keyword">for</span> (FSAppAttempt app : runnableApps) &#123;</span><br><span class="line">        <span class="comment">// 判断 APP 是否有资源需求，即有资源还没有得到满足</span></span><br><span class="line">        <span class="keyword">if</span> (!Resources.isNone(app.getPendingDemand()) &amp;&amp;</span><br><span class="line">            (assignment || app.shouldCheckForStarvation())) &#123;</span><br><span class="line">          pendingForResourceApps.add(app);</span><br><span class="line">        &#125;</span><br><span class="line">      &#125;</span><br><span class="line">    &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">      readLock.unlock();</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> pendingForResourceApps;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>获取到叶子节点有资源需求的 APP 后，调用 FSAppAttempt 类的实例 assignContainer(node) 方法，进行接下来的分配逻辑。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FSAppAttempt.java</span></span><br><span class="line">  <span class="meta">@Override</span></span><br><span class="line">  <span class="function"><span class="keyword">public</span> Resource <span class="title">assignContainer</span><span class="params">(FSSchedulerNode node)</span> </span>&#123;</span><br><span class="line">    <span class="comment">// 这里主要检查队列已使用资源是否达到了用于运行 AM 的资源限制</span></span><br><span class="line">    <span class="keyword">if</span> (isOverAMShareLimit()) &#123;</span><br><span class="line">      List&lt;ResourceRequest&gt; ask = appSchedulingInfo.getAllResourceRequests();</span><br><span class="line">      Resource amResourceRequest = Resources.none();</span><br><span class="line">      <span class="keyword">if</span> (!ask.isEmpty()) &#123;</span><br><span class="line">        amResourceRequest = ask.get(<span class="number">0</span>).getCapability();</span><br><span class="line">      &#125;</span><br><span class="line">      <span class="keyword">if</span> (LOG.isDebugEnabled()) &#123;</span><br><span class="line">        LOG.debug(<span class="string">&quot;AM resource request: &quot;</span> + amResourceRequest</span><br><span class="line">            + <span class="string">&quot; exceeds maximum AM resource allowed, &quot;</span></span><br><span class="line">            + getQueue().dumpState());</span><br><span class="line">      &#125;</span><br><span class="line"></span><br><span class="line">      <span class="keyword">return</span> Resources.none();</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> assignContainer(node, <span class="keyword">false</span>);</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>这里主要检查队列已使用资源是否达到了用于运行 AM 的资源限制，如果没有的话，则继续调度。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FSAppAttempt.java</span></span><br><span class="line">  <span class="function"><span class="keyword">private</span> Resource <span class="title">assignContainer</span><span class="params">(FSSchedulerNode node, <span class="keyword">boolean</span> reserved)</span> </span>&#123;</span><br><span class="line">    <span class="keyword">if</span> (LOG.isTraceEnabled()) &#123;</span><br><span class="line">      LOG.trace(<span class="string">&quot;Node offered to app: &quot;</span> + getName() + <span class="string">&quot; reserved: &quot;</span> + reserved);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 对 APP 的所有 ResourceRequest 按照 priority 排序</span></span><br><span class="line">    Collection&lt;Priority&gt; prioritiesToTry = (reserved) ?</span><br><span class="line">        Arrays.asList(node.getReservedContainer().getReservedPriority()) :</span><br><span class="line">        getPriorities();</span><br><span class="line"></span><br><span class="line">    <span class="comment">// For each priority, see if we can schedule a node local, rack local</span></span><br><span class="line">    <span class="comment">// or off-switch request. Rack of off-switch requests may be delayed</span></span><br><span class="line">    <span class="comment">// (not scheduled) in order to promote better locality.</span></span><br><span class="line">    <span class="keyword">synchronized</span> (<span class="keyword">this</span>) &#123;</span><br><span class="line">      <span class="comment">// 按照 priority 从高到低遍历所有 ResourceRequest</span></span><br><span class="line">      <span class="keyword">for</span> (Priority priority : prioritiesToTry) &#123;</span><br><span class="line">        <span class="comment">// 判断该 Container 是否有预留</span></span><br><span class="line">        <span class="comment">// hasContainerForNode() 会分 node、rack、any 三种情况考虑该节点是否有合适的 Container</span></span><br><span class="line">        <span class="keyword">if</span> (!reserved &amp;&amp; !hasContainerForNode(priority, node)) &#123;</span><br><span class="line">          <span class="keyword">continue</span>;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 调度机会计数加 1</span></span><br><span class="line">        addSchedulingOpportunity(priority);</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 下面的逻辑主要根据 NODE_LOCAL、RACK_LOCAL、OFF_SWITCH 三种情况判断该 ResourceRequest 满足哪一种调度方式</span></span><br><span class="line">        ResourceRequest rackLocalRequest = getResourceRequest(priority,</span><br><span class="line">            node.getRackName());</span><br><span class="line">        ResourceRequest localRequest = getResourceRequest(priority,</span><br><span class="line">            node.getNodeName());</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (localRequest != <span class="keyword">null</span> &amp;&amp; !localRequest.getRelaxLocality()) &#123;</span><br><span class="line">          LOG.warn(<span class="string">&quot;Relax locality off is not supported on local request: &quot;</span></span><br><span class="line">              + localRequest);</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 省略三种情况的具体选择逻辑</span></span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> Resources.none();</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>上面这段代码，主要是按照 priority 从高到低的顺序遍历所有的 ResourceRequest，针对每个 ResourceRequest，在待分配的 node 节点上，根据 NODE_LOCAL、RACK_LOCAL、OFF_SWITCH 三种情况判断该 ResourceRequest 满足哪一种调度方式，这里以 NODE_LOCAL 参数为例进入到下一步的调度逻辑。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FSAppAttempt.java</span></span><br><span class="line">  <span class="function"><span class="keyword">private</span> Resource <span class="title">assignContainer</span><span class="params">(</span></span></span><br><span class="line"><span class="params"><span class="function">      FSSchedulerNode node, ResourceRequest request, NodeType type,</span></span></span><br><span class="line"><span class="params"><span class="function">      <span class="keyword">boolean</span> reserved)</span> </span>&#123;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 当前 ResoureRequest 需要多少资源</span></span><br><span class="line">    Resource capability = request.getCapability();</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 当前 node 还剩多少资源可分配</span></span><br><span class="line">    Resource available = node.getAvailableResource();</span><br><span class="line"></span><br><span class="line">    Container reservedContainer = <span class="keyword">null</span>;</span><br><span class="line">    <span class="comment">// 判断是否有预留，有预留在直接从该 node 获取对应资源。这里不考虑预留的情况</span></span><br><span class="line">    <span class="keyword">if</span> (reserved) &#123;</span><br><span class="line">      reservedContainer = node.getReservedContainer().getContainer();</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 判断该 ResourRequest 的资源需求是否能够在该 node 上得到满足</span></span><br><span class="line">    <span class="keyword">if</span> (Resources.fitsIn(capability, available)) &#123;</span><br><span class="line">      <span class="comment">// 重点：node 资源足够的话，这里会分配出一个 Container</span></span><br><span class="line">      RMContainer allocatedContainer =</span><br><span class="line">          allocate(type, node, request.getPriority(), request,</span><br><span class="line">              reservedContainer);</span><br><span class="line">      <span class="keyword">if</span> (allocatedContainer == <span class="keyword">null</span>) &#123;</span><br><span class="line">        <span class="comment">// Did the application need this resource?</span></span><br><span class="line">        <span class="keyword">if</span> (reserved) &#123;</span><br><span class="line">          unreserve(request.getPriority(), node);</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> Resources.none();</span><br><span class="line">      &#125;</span><br><span class="line"></span><br><span class="line">      <span class="comment">// If we had previously made a reservation, delete it</span></span><br><span class="line">      <span class="keyword">if</span> (reserved) &#123;</span><br><span class="line">        unreserve(request.getPriority(), node);</span><br><span class="line">      &#125;</span><br><span class="line"></span><br><span class="line">      <span class="comment">// 通知 node 记录该分配出来的 Container</span></span><br><span class="line">      node.allocateContainer(allocatedContainer);</span><br><span class="line"></span><br><span class="line">      <span class="comment">// If not running unmanaged, the first container we allocate is always</span></span><br><span class="line">      <span class="comment">// the AM. Set the amResource for this app and update the leaf queue&#x27;s AM</span></span><br><span class="line">      <span class="comment">// usage</span></span><br><span class="line">      <span class="keyword">if</span> (!isAmRunning() &amp;&amp; !getUnmanagedAM()) &#123;</span><br><span class="line">        setAMResource(capability);</span><br><span class="line">        getQueue().addAMResourceUsage(capability);</span><br><span class="line">        setAmRunning(<span class="keyword">true</span>);</span><br><span class="line">      &#125;</span><br><span class="line"></span><br><span class="line">      <span class="keyword">return</span> capability;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    ...  <span class="comment">// 省略</span></span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>重点看看分配逻辑 allocate() 方法。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FSAppAttempt.java</span></span><br><span class="line">  <span class="function"><span class="keyword">synchronized</span> <span class="keyword">public</span> RMContainer <span class="title">allocate</span><span class="params">(NodeType type, FSSchedulerNode node,</span></span></span><br><span class="line"><span class="params"><span class="function">      Priority priority, ResourceRequest request,</span></span></span><br><span class="line"><span class="params"><span class="function">      Container reservedContainer)</span> </span>&#123;</span><br><span class="line">    <span class="comment">// 更新 locality 级别，忽略</span></span><br><span class="line">    NodeType allowed = allowedLocalityLevel.get(priority);</span><br><span class="line">    <span class="keyword">if</span> (allowed != <span class="keyword">null</span>) &#123;</span><br><span class="line">      <span class="keyword">if</span> (allowed.equals(NodeType.OFF_SWITCH) &amp;&amp;</span><br><span class="line">          (type.equals(NodeType.NODE_LOCAL) ||</span><br><span class="line">              type.equals(NodeType.RACK_LOCAL))) &#123;</span><br><span class="line">        <span class="keyword">this</span>.resetAllowedLocalityLevel(priority, type);</span><br><span class="line">      &#125;</span><br><span class="line">      <span class="keyword">else</span> <span class="keyword">if</span> (allowed.equals(NodeType.RACK_LOCAL) &amp;&amp;</span><br><span class="line">          type.equals(NodeType.NODE_LOCAL)) &#123;</span><br><span class="line">        <span class="keyword">this</span>.resetAllowedLocalityLevel(priority, type);</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// Required sanity check - AM can call &#x27;allocate&#x27; to update resource</span></span><br><span class="line">    <span class="comment">// request without locking the scheduler, hence we need to check</span></span><br><span class="line">    <span class="keyword">if</span> (getTotalRequiredResources(priority) &lt;= <span class="number">0</span>) &#123;</span><br><span class="line">      <span class="keyword">return</span> <span class="keyword">null</span>;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    Container container = reservedContainer;</span><br><span class="line">    <span class="keyword">if</span> (container == <span class="keyword">null</span>) &#123;</span><br><span class="line">      <span class="comment">// 重点：这里会具体创建一个 Container 实例</span></span><br><span class="line">      container =</span><br><span class="line">          createContainer(node, request.getCapability(), request.getPriority());</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 用 RMContainer 记录新创建出来的 Container 实例</span></span><br><span class="line">    RMContainer rmContainer = <span class="keyword">new</span> RMContainerImpl(container,</span><br><span class="line">        getApplicationAttemptId(), node.getNodeID(),</span><br><span class="line">        appSchedulingInfo.getUser(), rmContext);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 重点：记录 rmContainer，等待下次 AM 心跳发生时，会从这里把分配出来的 Container 带走</span></span><br><span class="line">    newlyAllocatedContainers.add(rmContainer);</span><br><span class="line">    liveContainers.put(container.getId(), rmContainer);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// Update consumption and track allocations</span></span><br><span class="line">    List&lt;ResourceRequest&gt; resourceRequestList = appSchedulingInfo.allocate(</span><br><span class="line">        type, node, priority, request, container);</span><br><span class="line">    Resources.addTo(currentConsumption, container.getResource());</span><br><span class="line">    getQueue().incUsedResource(container.getResource());</span><br><span class="line">    <span class="comment">// Update resource requests related to &quot;request&quot; and store in RMContainer</span></span><br><span class="line">    ((RMContainerImpl) rmContainer).setResourceRequests(resourceRequestList);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 这里发送 Container 的 START 事件，更新 Container 状态</span></span><br><span class="line">    rmContainer.handle(</span><br><span class="line">        <span class="keyword">new</span> RMContainerEvent(container.getId(), RMContainerEventType.START));</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (LOG.isDebugEnabled()) &#123;</span><br><span class="line">      LOG.debug(<span class="string">&quot;allocate: applicationAttemptId=&quot;</span></span><br><span class="line">          + container.getId().getApplicationAttemptId()</span><br><span class="line">          + <span class="string">&quot; container=&quot;</span> + container.getId() + <span class="string">&quot; host=&quot;</span></span><br><span class="line">          + container.getNodeId().getHost() + <span class="string">&quot; type=&quot;</span> + type);</span><br><span class="line">    &#125;</span><br><span class="line">    RMAuditLogger.logSuccess(getUser(),</span><br><span class="line">        AuditConstants.ALLOC_CONTAINER, <span class="string">&quot;SchedulerApp&quot;</span>,</span><br><span class="line">        getApplicationId(), container.getId());</span><br><span class="line"></span><br><span class="line">    <span class="keyword">return</span> rmContainer;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>至此，一个全新的 Container 已经分配出来了，并保存在 RM 的内存数据结构中，那分配出来的 Container 是如何被用到的呢？我们接着后续的逻辑。</p>
+<h2 id="3-3-AM-认领资源"><a href="#3-3-AM-认领资源" class="headerlink" title="3.3 AM 认领资源"></a><strong>3.3 AM 认领资源</strong></h2><p>上面知道，分配的 Container 已经保存在 RM 的内存数据结构中了，接下来就是 AM 的心跳上报定时领取给自己分配的资源。</p>
+<h3 id="3-3-1-AM-启动并发起资源请求"><a href="#3-3-1-AM-启动并发起资源请求" class="headerlink" title="3.3.1 AM 启动并发起资源请求"></a><strong>3.3.1 AM 启动并发起资源请求</strong></h3><p>作业在启动时，会首先启动 ApplicationMaster 进程，启动入口如下：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/hadoop/YARN/applications/distributedshell/ApplicationMaster.java</span></span><br><span class="line">  <span class="function"><span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">void</span> <span class="title">main</span><span class="params">(String[] args)</span> </span>&#123;</span><br><span class="line">    <span class="keyword">boolean</span> result = <span class="keyword">false</span>;</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">      ApplicationMaster appMaster = <span class="keyword">new</span> ApplicationMaster();</span><br><span class="line">      LOG.info(<span class="string">&quot;Initializing ApplicationMaster&quot;</span>);</span><br><span class="line">      <span class="keyword">boolean</span> doRun = appMaster.init(args);</span><br><span class="line">      <span class="keyword">if</span> (!doRun) &#123;</span><br><span class="line">        System.exit(<span class="number">0</span>);</span><br><span class="line">      &#125;</span><br><span class="line">      <span class="comment">// ApplicationMaster 启动 run() 方法</span></span><br><span class="line">      appMaster.run();</span><br><span class="line">      result = appMaster.finish();</span><br><span class="line">    &#125; <span class="keyword">catch</span> (Throwable t) &#123;</span><br><span class="line">      LOG.fatal(<span class="string">&quot;Error running ApplicationMaster&quot;</span>, t);</span><br><span class="line">      LogManager.shutdown();</span><br><span class="line">      ExitUtil.terminate(<span class="number">1</span>, t);</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">if</span> (result) &#123;</span><br><span class="line">      LOG.info(<span class="string">&quot;Application Master completed successfully. exiting&quot;</span>);</span><br><span class="line">      System.exit(<span class="number">0</span>);</span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">      LOG.info(<span class="string">&quot;Application Master failed. exiting&quot;</span>);</span><br><span class="line">      System.exit(<span class="number">2</span>);</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>run() 方法做了什么事呢？主要是进行 ApplicationMaster 的注册和心跳。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/hadoop/YARN/applications/distributedshell/ApplicationMaster.java</span></span><br><span class="line"> <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">run</span><span class="params">()</span> <span class="keyword">throws</span> YARNException, IOException </span>&#123;</span><br><span class="line">    LOG.info(<span class="string">&quot;Starting ApplicationMaster&quot;</span>);</span><br><span class="line"></span><br><span class="line">    ... <span class="comment">// 省略</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">// 初始化 AMRMClient 实例，用于向 RM 发送 RPC 请求，这里采用异步方式，每个 AMRMClient 都是单独的线程</span></span><br><span class="line">    AMRMClientAsync.CallbackHandler allocListener = <span class="keyword">new</span> RMCallbackHandler();</span><br><span class="line">    amRMClient = AMRMClientAsync.createAMRMClientAsync(<span class="number">1000</span>, allocListener);</span><br><span class="line">    amRMClient.init(conf);</span><br><span class="line">    amRMClient.start();</span><br><span class="line"></span><br><span class="line">    containerListener = createNMCallbackHandler();</span><br><span class="line">    nmClientAsync = <span class="keyword">new</span> NMClientAsyncImpl(containerListener);</span><br><span class="line">    nmClientAsync.init(conf);</span><br><span class="line">    nmClientAsync.start();</span><br><span class="line"></span><br><span class="line">    appMasterHostname = NetUtils.getHostname();</span><br><span class="line">    <span class="comment">// 重要：AM 通过 RPC 请求向 RM 注册，心跳线程在注册逻辑里启动</span></span><br><span class="line">    RegisterApplicationMasterResponse response = amRMClient</span><br><span class="line">        .registerApplicationMaster(appMasterHostname, appMasterRpcPort,</span><br><span class="line">            appMasterTrackingUrl);</span><br><span class="line">    ... <span class="comment">// 省略</span></span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>AM 向 RM 发送 RPC 请求是通过 ApplicationMasterService 服务实现的，这里的 AM 注册和心跳都需要通过该服务与 RM 进行通讯。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/hadoop/YARN/client/api/async/impl/AMRMClientAsyncImpl.java</span></span><br><span class="line">  <span class="function"><span class="keyword">public</span> RegisterApplicationMasterResponse <span class="title">registerApplicationMaster</span><span class="params">(</span></span></span><br><span class="line"><span class="params"><span class="function">      String appHostName, <span class="keyword">int</span> appHostPort, String appTrackingUrl)</span></span></span><br><span class="line"><span class="function">      <span class="keyword">throws</span> YARNException, IOException </span>&#123;</span><br><span class="line">    RegisterApplicationMasterResponse response = client</span><br><span class="line">        .registerApplicationMaster(appHostName, appHostPort, appTrackingUrl);</span><br><span class="line">    <span class="comment">// 启动 AM 心跳线程</span></span><br><span class="line">    heartbeatThread.start();</span><br><span class="line">    <span class="keyword">return</span> response;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>这里忽略 registerApplicationMaster() 注册的逻辑，主要是心跳线程做了些什么，即 heartbeatThread 线程的工作。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/hadoop/YARN/client/api/async/impl/AMRMClientAsyncImpl.java</span></span><br><span class="line">    <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">run</span><span class="params">()</span> </span>&#123;</span><br><span class="line">      <span class="keyword">while</span> (<span class="keyword">true</span>) &#123;</span><br><span class="line">        AllocateResponse response = <span class="keyword">null</span>;</span><br><span class="line">        <span class="comment">// synchronization ensures we don&#x27;t send heartbeats after unregistering</span></span><br><span class="line">        <span class="keyword">synchronized</span> (unregisterHeartbeatLock) &#123;</span><br><span class="line">          <span class="keyword">if</span> (!keepRunning) &#123;</span><br><span class="line">            <span class="keyword">return</span>;</span><br><span class="line">          &#125;</span><br><span class="line"></span><br><span class="line">          <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="comment">// 重要：AM 通过 AMRMClient 客户端向 RM 发送请求，进行资源的 allocate() 操作</span></span><br><span class="line">            response = client.allocate(progress);</span><br><span class="line">          &#125; <span class="keyword">catch</span> (ApplicationAttemptNotFoundException e) &#123;</span><br><span class="line">            handler.onShutdownRequest();</span><br><span class="line">            LOG.info(<span class="string">&quot;Shutdown requested. Stopping callback.&quot;</span>);</span><br><span class="line">            <span class="keyword">return</span>;</span><br><span class="line">          &#125; <span class="keyword">catch</span> (Throwable ex) &#123;</span><br><span class="line">            LOG.error(<span class="string">&quot;Exception on heartbeat&quot;</span>, ex);</span><br><span class="line">            savedException = ex;</span><br><span class="line">            <span class="comment">// interrupt handler thread in case it waiting on the queue</span></span><br><span class="line">            handlerThread.interrupt();</span><br><span class="line">            <span class="keyword">return</span>;</span><br><span class="line">          &#125;</span><br><span class="line">          <span class="keyword">if</span> (response != <span class="keyword">null</span>) &#123;</span><br><span class="line">            <span class="keyword">while</span> (<span class="keyword">true</span>) &#123;</span><br><span class="line">              <span class="keyword">try</span> &#123;</span><br><span class="line">                responseQueue.put(response);</span><br><span class="line">                <span class="keyword">break</span>;</span><br><span class="line">              &#125; <span class="keyword">catch</span> (InterruptedException ex) &#123;</span><br><span class="line">                LOG.debug(<span class="string">&quot;Interrupted while waiting to put on response queue&quot;</span>, ex);</span><br><span class="line">              &#125;</span><br><span class="line">            &#125;</span><br><span class="line">          &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">          Thread.sleep(heartbeatIntervalMs.get());</span><br><span class="line">        &#125; <span class="keyword">catch</span> (InterruptedException ex) &#123;</span><br><span class="line">          LOG.debug(<span class="string">&quot;Heartbeater interrupted&quot;</span>, ex);</span><br><span class="line">        &#125;</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br></pre></td></tr></table></figure>
+
+<p>至此，AM 已经向 RM 发送资源请求，接下来看看 RM 是如何处理这个 RPC 请求的。</p>
+<h3 id="3-3-2-RM-处理-AM-请求"><a href="#3-3-2-RM-处理-AM-请求" class="headerlink" title="3.3.2 RM 处理 AM 请求"></a><strong>3.3.2 RM 处理 AM 请求</strong></h3><p>RM 中负责处理 AM 心跳请求是通过 ApplicationMasterService 服务，其内部的 allocate() 负责处理 AM 的 RPC 资源分配请求，具体逻辑如下：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/hadoop/yarn/server/resourcemanager/ApplicationMasterService.java</span></span><br><span class="line">  <span class="meta">@Override</span></span><br><span class="line">  <span class="function"><span class="keyword">public</span> AllocateResponse <span class="title">allocate</span><span class="params">(AllocateRequest request)</span></span></span><br><span class="line"><span class="function">      <span class="keyword">throws</span> YARNException, IOException </span>&#123;</span><br><span class="line"></span><br><span class="line">    AMRMTokenIdentifier amrmTokenIdentifier = authorizeRequest();</span><br><span class="line"></span><br><span class="line">    ApplicationAttemptId appAttemptId =</span><br><span class="line">        amrmTokenIdentifier.getApplicationAttemptId();</span><br><span class="line">    ApplicationId applicationId = appAttemptId.getApplicationId();</span><br><span class="line"></span><br><span class="line">    <span class="keyword">this</span>.amLivelinessMonitor.receivedPing(appAttemptId);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 针对每个 appAttempt，会有一个独立的锁对象</span></span><br><span class="line">    AllocateResponseLock lock = responseMap.get(appAttemptId);</span><br><span class="line">    <span class="keyword">if</span> (lock == <span class="keyword">null</span>) &#123;</span><br><span class="line">      String message =</span><br><span class="line">          <span class="string">&quot;Application attempt &quot;</span> + appAttemptId</span><br><span class="line">              + <span class="string">&quot; doesn&#x27;t exist in ApplicationMasterService cache.&quot;</span>;</span><br><span class="line">      LOG.error(message);</span><br><span class="line">      <span class="keyword">throw</span> <span class="keyword">new</span> ApplicationAttemptNotFoundException(message);</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">synchronized</span> (lock) &#123;</span><br><span class="line">      AllocateResponse lastResponse = lock.getAllocateResponse();</span><br><span class="line">      </span><br><span class="line">      <span class="comment">// 省略一些神圣的检查工作</span></span><br><span class="line"></span><br><span class="line">      <span class="comment">// 重点：AM 资源请求的心跳函数，发送新请求和接收之前的分配都需要进行</span></span><br><span class="line">      Allocation allocation =</span><br><span class="line">          <span class="keyword">this</span>.rScheduler.allocate(appAttemptId, ask, release, </span><br><span class="line">              blacklistAdditions, blacklistRemovals);</span><br><span class="line"></span><br><span class="line">      <span class="comment">// 省略一些状态更新操作</span></span><br><span class="line">      </span><br><span class="line">      lock.setAllocateResponse(allocateResponse);</span><br><span class="line">      <span class="keyword">return</span> allocateResponse;</span><br><span class="line">    &#125;    </span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>继续跟进 this.rScheduler.allocate() 方法，这里的 scheduler 配置的是 FairScheduler，来看看它的 allocate 方法。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FairScheduler.java</span></span><br><span class="line">  <span class="meta">@Override</span></span><br><span class="line">  <span class="function"><span class="keyword">public</span> Allocation <span class="title">allocate</span><span class="params">(ApplicationAttemptId appAttemptId,</span></span></span><br><span class="line"><span class="params"><span class="function">      List&lt;ResourceRequest&gt; ask, List&lt;ContainerId&gt; release,</span></span></span><br><span class="line"><span class="params"><span class="function">      List&lt;String&gt; blacklistAdditions, List&lt;String&gt; blacklistRemovals)</span> </span>&#123;</span><br><span class="line">    <span class="comment">// 跳过一些检查工作</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">// 记录 Container 分配的开始开始时间</span></span><br><span class="line">    application.recordContainerRequestTime(getClock().getTime());</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 释放 AM 认为要释放的 Container</span></span><br><span class="line">    releaseContainers(release, application);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">synchronized</span> (application) &#123;</span><br><span class="line">      <span class="keyword">if</span> (!ask.isEmpty()) &#123;</span><br><span class="line">        <span class="keyword">if</span> (LOG.isDebugEnabled()) &#123;</span><br><span class="line">          LOG.debug(<span class="string">&quot;allocate: pre-update&quot;</span> +</span><br><span class="line">              <span class="string">&quot; applicationAttemptId=&quot;</span> + appAttemptId +</span><br><span class="line">              <span class="string">&quot; application=&quot;</span> + application.getApplicationId());</span><br><span class="line">        &#125;</span><br><span class="line">        application.showRequests();</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 更新应用的资源请求</span></span><br><span class="line">        application.updateResourceRequests(ask);</span><br><span class="line"></span><br><span class="line">        application.showRequests();</span><br><span class="line">      &#125;</span><br><span class="line"></span><br><span class="line">      Set&lt;ContainerId&gt; preemptionContainerIds =</span><br><span class="line">          application.getPreemptionContainerIds();</span><br><span class="line">      <span class="keyword">if</span> (LOG.isDebugEnabled()) &#123;</span><br><span class="line">        LOG.debug(</span><br><span class="line">            <span class="string">&quot;allocate: post-update&quot;</span> + <span class="string">&quot; applicationAttemptId=&quot;</span> + appAttemptId</span><br><span class="line">                + <span class="string">&quot; #ask=&quot;</span> + ask.size() + <span class="string">&quot; reservation= &quot;</span> + application</span><br><span class="line">                .getCurrentReservation());</span><br><span class="line"></span><br><span class="line">        LOG.debug(<span class="string">&quot;Preempting &quot;</span> + preemptionContainerIds.size()</span><br><span class="line">            + <span class="string">&quot; container(s)&quot;</span>);</span><br><span class="line">      &#125;</span><br><span class="line"></span><br><span class="line">      <span class="keyword">if</span> (application.isWaitingForAMContainer(application.getApplicationId())) &#123;</span><br><span class="line">        <span class="comment">// Allocate is for AM and update AM blacklist for this</span></span><br><span class="line">        application.updateAMBlacklist(</span><br><span class="line">            blacklistAdditions, blacklistRemovals);</span><br><span class="line">      &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        application.updateBlacklist(blacklistAdditions, blacklistRemovals);</span><br><span class="line">      &#125;</span><br><span class="line"></span><br><span class="line">      <span class="comment">// 重要：这里就是 AM 获取最近分配的 Container。这里获取的其实就是前面保存在 RM 内存数据结构的 Container。</span></span><br><span class="line">      ContainersAndNMTokensAllocation allocation =</span><br><span class="line">          application.pullNewlyAllocatedContainersAndNMTokens();</span><br><span class="line"></span><br><span class="line">      <span class="comment">// Record container allocation time</span></span><br><span class="line">      <span class="keyword">if</span> (!(allocation.getContainerList().isEmpty())) &#123;</span><br><span class="line">        application.recordContainerAllocationTime(getClock().getTime());</span><br><span class="line">      &#125;</span><br><span class="line"></span><br><span class="line">      <span class="keyword">return</span> <span class="keyword">new</span> Allocation(allocation.getContainerList(),</span><br><span class="line">        application.getHeadroom(), preemptionContainerIds, <span class="keyword">null</span>, <span class="keyword">null</span>,</span><br><span class="line">        allocation.getNMTokenList());</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>至此，AM 已经顺利拿到 RM 分配的 Container，整理 FairScheduler 资源分配流程基本就是这样。</p>
+<h1 id="参考资料"><a href="#参考资料" class="headerlink" title="参考资料"></a>参考资料</h1><ul>
+<li><a target="_blank" rel="noopener" href="https://tech.meituan.com/2019/08/01/hadoop-YARN-scheduling-performance-optimization-practice.html">(美团)Hadoop YARN: 调度性能优化实践</a></li>
+<li><a target="_blank" rel="noopener" href="https://yoelee.github.io/2018/06/26/YARN%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%905-%E8%B5%84%E6%BA%90%E8%B0%83%E5%BA%A6/">YARN源码分析-资源调度</a></li>
+<li><a target="_blank" rel="noopener" href="https://blog.csdn.net/zhanyuanlin/article/details/78799131#">YARN资源请求处理和资源分配原理解析</a></li>
+<li><a target="_blank" rel="noopener" href="https://blog.csdn.net/iie_libi/article/details/71597753">YARN资源调度策略</a></li>
+</ul>
+
+    </div>
+
+    
+    
+    
+
+    <div>
+      
+      <div>
+	 
+		<div style="text-align:center;color:#bfbfbf;font-size:16px;"> 
+			<span>-------- 本文结束 </span> <i class="fa fa-paw"></i> <span> 感谢阅读 --------</span>
+		</div> 
+	
+</div>
+      
+    </div>
+        <div class="reward-container">
+  <div></div>
+  <button onclick="var qr = document.getElementById('qr'); qr.style.display = (qr.style.display === 'none') ? 'block' : 'none';">
+    请我喝杯咖啡~
+  </button>
+  <div id="qr" style="display: none;">
+      
+      <div style="display: inline-block;">
+        <img src="/images/wechatpay.png" alt="笨小康 微信打赏">
+        <p>微信打赏</p>
+      </div>
+      
+      <div style="display: inline-block;">
+        <img src="/images/alipay.png" alt="笨小康 支付宝打赏">
+        <p>支付宝打赏</p>
+      </div>
+
+  </div>
+</div>
+
+
+      <footer class="post-footer">
+          <div class="post-tags">
+              <a href="/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/" rel="tag"><i class="fa fa-tag"></i> 大数据</a>
+              <a href="/tags/YARN/" rel="tag"><i class="fa fa-tag"></i> YARN</a>
+          </div>
+
+        
+
+
+        
+    <div class="post-nav">
+      <div class="post-nav-item">
+    <a href="/2021/11/06/YARN-NodeManager%E6%80%BB%E4%BD%93%E6%9E%B6%E6%9E%84/" rel="prev" title="YARN NodeManager总体架构">
+      <i class="fa fa-chevron-left"></i> YARN NodeManager总体架构
+    </a></div>
+      <div class="post-nav-item">
+    <a href="/2021/11/07/YARN-ApplicationMaster%E5%90%AF%E5%8A%A8%E5%8E%9F%E7%90%86%E4%B8%8E%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/" rel="next" title="YARN ApplicationMaster启动原理与源码分析">
+      YARN ApplicationMaster启动原理与源码分析 <i class="fa fa-chevron-right"></i>
+    </a></div>
+    </div>
+      </footer>
+    
+  </article>
+  
+  
+  
+
+
+
+
+          </div>
+          
+
+<script>
+  window.addEventListener('tabs:register', () => {
+    let { activeClass } = CONFIG.comments;
+    if (CONFIG.comments.storage) {
+      activeClass = localStorage.getItem('comments_active') || activeClass;
+    }
+    if (activeClass) {
+      let activeTab = document.querySelector(`a[href="#comment-${activeClass}"]`);
+      if (activeTab) {
+        activeTab.click();
+      }
+    }
+  });
+  if (CONFIG.comments.storage) {
+    window.addEventListener('tabs:click', event => {
+      if (!event.target.matches('.tabs-comment .tab-content .tab-pane')) return;
+      let commentClass = event.target.classList[1];
+      localStorage.setItem('comments_active', commentClass);
+    });
+  }
+</script>
+
+        </div>
+          
+  
+  <div class="toggle sidebar-toggle">
+    <span class="toggle-line toggle-line-first"></span>
+    <span class="toggle-line toggle-line-middle"></span>
+    <span class="toggle-line toggle-line-last"></span>
+  </div>
+
+  <aside class="sidebar">
+    <div class="sidebar-inner">
+
+      <ul class="sidebar-nav motion-element">
+        <li class="sidebar-nav-toc">
+          文章目录
+        </li>
+        <li class="sidebar-nav-overview">
+          站点概览
+        </li>
+      </ul>
+
+      <!--noindex-->
+      <div class="post-toc-wrap sidebar-panel">
+          <div class="post-toc motion-element"><ol class="nav"><li class="nav-item nav-level-1"><a class="nav-link" href="#1-YARN-%E8%B5%84%E6%BA%90%E8%B0%83%E5%BA%A6%E6%96%B9%E5%BC%8F"><span class="nav-text">1. YARN 资源调度方式</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#2-YARN-%E8%B0%83%E5%BA%A6%E6%B5%81%E7%A8%8B"><span class="nav-text">2. YARN 调度流程</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#2-1-%E5%90%8D%E8%AF%8D%E8%A7%A3%E9%87%8A"><span class="nav-text">2.1 名词解释</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#2-2-%E8%B0%83%E5%BA%A6%E6%B5%81%E7%A8%8B"><span class="nav-text">2.2 调度流程</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#3-FairScheduler-%E8%B5%84%E6%BA%90%E5%88%86%E9%85%8D"><span class="nav-text">3. FairScheduler 资源分配</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#3-1-NM-%E5%BF%83%E8%B7%B3%E4%B8%8A%E6%8A%A5"><span class="nav-text">3.1 NM 心跳上报</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#3-2-RM-%E6%8E%A5%E6%94%B6%E5%BF%83%E8%B7%B3"><span class="nav-text">3.2 RM 接收心跳</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#3-3-AM-%E8%AE%A4%E9%A2%86%E8%B5%84%E6%BA%90"><span class="nav-text">3.3 AM 认领资源</span></a><ol class="nav-child"><li class="nav-item nav-level-3"><a class="nav-link" href="#3-3-1-AM-%E5%90%AF%E5%8A%A8%E5%B9%B6%E5%8F%91%E8%B5%B7%E8%B5%84%E6%BA%90%E8%AF%B7%E6%B1%82"><span class="nav-text">3.3.1 AM 启动并发起资源请求</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#3-3-2-RM-%E5%A4%84%E7%90%86-AM-%E8%AF%B7%E6%B1%82"><span class="nav-text">3.3.2 RM 处理 AM 请求</span></a></li></ol></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="nav-text">参考资料</span></a></li></ol></div>
+      </div>
+      <!--/noindex-->
+
+      <div class="site-overview-wrap sidebar-panel">
+        <div class="site-author motion-element" itemprop="author" itemscope itemtype="http://schema.org/Person">
+  <p class="site-author-name" itemprop="name">笨小康</p>
+  <div class="site-description" itemprop="description"></div>
+</div>
+<div class="site-state-wrap motion-element">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+          <a href="/archives/">
+        
+          <span class="site-state-item-count">5</span>
+          <span class="site-state-item-name">日志</span>
+        </a>
+      </div>
+      <div class="site-state-item site-state-categories">
+            <a href="/categories/">
+          
+        <span class="site-state-item-count">1</span>
+        <span class="site-state-item-name">分类</span></a>
+      </div>
+      <div class="site-state-item site-state-tags">
+            <a href="/tags/">
+          
+        <span class="site-state-item-count">2</span>
+        <span class="site-state-item-name">标签</span></a>
+      </div>
+  </nav>
+</div>
+
+
+
+      </div>
+
+    </div>
+  </aside>
+  <div id="sidebar-dimmer"></div>
+
+
+      </div>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        
+
+        
+
+<div class="copyright">
+  
+  &copy; 
+  <span itemprop="copyrightYear">2021</span>
+  <span class="with-love">
+    <i class="fa fa-heart"></i>
+  </span>
+  <span class="author" itemprop="copyrightHolder">笨小康</span>
+</div>
+
+        
+<div class="busuanzi-count">
+  <script async src="https://busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+    <span class="post-meta-item" id="busuanzi_container_site_uv" style="display: none;">
+      <span class="post-meta-item-icon">
+        <i class="fa fa-user"></i>
+      </span>
+      <span class="site-uv" title="总访客量">
+        <span id="busuanzi_value_site_uv"></span>
+      </span>
+    </span>
+    <span class="post-meta-divider">|</span>
+    <span class="post-meta-item" id="busuanzi_container_site_pv" style="display: none;">
+      <span class="post-meta-item-icon">
+        <i class="fa fa-eye"></i>
+      </span>
+      <span class="site-pv" title="总访问量">
+        <span id="busuanzi_value_site_pv"></span>
+      </span>
+    </span>
+</div>
+
+
+
+
+
+
+
+
+      </div>
+    </footer>
+  </div>
+
+  
+  <script src="/lib/anime.min.js"></script>
+  <script src="/lib/velocity/velocity.min.js"></script>
+  <script src="/lib/velocity/velocity.ui.min.js"></script>
+
+<script src="/js/utils.js"></script>
+
+<script src="/js/motion.js"></script>
+
+
+<script src="/js/schemes/pisces.js"></script>
+
+
+<script src="/js/next-boot.js"></script>
+
+
+
+
+  
+
+
+
+
+  
+<script src="/js/local-search.js"></script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+  
+
+</body>
+</html>
