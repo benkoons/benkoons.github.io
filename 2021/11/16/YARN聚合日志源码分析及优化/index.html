@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=2">
+<meta name="theme-color" content="#222">
+<meta name="generator" content="Hexo 5.4.0">
+  <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon-next.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/images/favicon-32x32-next.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/favicon-16x16-next.png">
+  <link rel="mask-icon" href="/images/logo.svg" color="#222">
+
+<link rel="stylesheet" href="/css/main.css">
+
+<link rel="stylesheet" href="//fonts.googleapis.com/css?family=Lato:300,300italic,400,400italic,700,700italic&display=swap&subset=latin,latin-ext">
+<link rel="stylesheet" href="/lib/font-awesome/css/all.min.css">
+
+<script id="hexo-configurations">
+    var NexT = window.NexT || {};
+    var CONFIG = {"hostname":"yoursite.com","root":"/","scheme":"Pisces","version":"7.8.0","exturl":false,"sidebar":{"position":"left","display":"post","padding":18,"offset":12,"onmobile":false},"copycode":{"enable":true,"show_result":true,"style":"default"},"back2top":{"enable":true,"sidebar":false,"scrollpercent":false},"bookmark":{"enable":false,"color":"#222","save":"auto"},"fancybox":false,"mediumzoom":false,"lazyload":false,"pangu":false,"comments":{"style":"tabs","active":null,"storage":true,"lazyload":false,"nav":null},"algolia":{"hits":{"per_page":10},"labels":{"input_placeholder":"Search for Posts","hits_empty":"We didn't find any results for the search: ${query}","hits_stats":"${hits} results found in ${time} ms"}},"localsearch":{"enable":true,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false},"motion":{"enable":true,"async":false,"transition":{"post_block":"fadeIn","post_header":"slideDownIn","post_body":"slideDownIn","coll_header":"slideLeftIn","sidebar":"slideUpIn"}},"path":"search.xml"};
+  </script>
+
+  <meta name="description" content="线上集群 Container 日志上报的事务集群 namenode rpc 持续飙高，影响到了 YARN 分配 Container 的性能，任务提交数下降，导致整个集群的吞吐量下降。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="YARN聚合日志源码分析及优化">
+<meta property="og:url" content="http://yoursite.com/2021/11/16/YARN%E8%81%9A%E5%90%88%E6%97%A5%E5%BF%97%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90%E5%8F%8A%E4%BC%98%E5%8C%96/index.html">
+<meta property="og:site_name" content="笨小康的博客">
+<meta property="og:description" content="线上集群 Container 日志上报的事务集群 namenode rpc 持续飙高，影响到了 YARN 分配 Container 的性能，任务提交数下降，导致整个集群的吞吐量下降。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/16/6d487d41f9fb51ce956ff7f2877ff802-1637065327727-58de5ef3-1b51-4f9d-809d-95a468c82d44-678b84.png">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/16/c3e8a179698af5e4bc0dc4ee1392583b-1637066438185-21b10203-de41-405f-8b01-73be38692032-44b5fa.png">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/16/043368e578589389f5922ef9f798fa7f-1637066438442-12a965c0-2692-452e-8052-c62c424f9c7b-d31c59.png">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/16/63c946d6373eeccbe88257d366bc7f41-1637067044797-16b73c6a-6576-4308-adf3-e7c334c46f5a-9caa8a.png">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/16/f030a2d6f3aff5590254ba0500e9f117-1637067077718-7e978d06-1909-423f-b610-45e3bc94e209-4fa55a.png">
+<meta property="article:published_time" content="2021-11-16T15:31:30.000Z">
+<meta property="article:modified_time" content="2021-11-16T15:50:12.136Z">
+<meta property="article:author" content="笨小康">
+<meta property="article:tag" content="大数据">
+<meta property="article:tag" content="YARN">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/16/6d487d41f9fb51ce956ff7f2877ff802-1637065327727-58de5ef3-1b51-4f9d-809d-95a468c82d44-678b84.png">
+
+<link rel="canonical" href="http://yoursite.com/2021/11/16/YARN%E8%81%9A%E5%90%88%E6%97%A5%E5%BF%97%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90%E5%8F%8A%E4%BC%98%E5%8C%96/">
+
+
+<script id="page-configurations">
+  // https://hexo.io/docs/variables.html
+  CONFIG.page = {
+    sidebar: "",
+    isHome : false,
+    isPost : true,
+    lang   : 'zh-CN'
+  };
+</script>
+
+  <title>YARN聚合日志源码分析及优化 | 笨小康的博客</title>
+  
+
+
+
+
+
+
+  <noscript>
+  <style>
+  .use-motion .brand,
+  .use-motion .menu-item,
+  .sidebar-inner,
+  .use-motion .post-block,
+  .use-motion .pagination,
+  .use-motion .comments,
+  .use-motion .post-header,
+  .use-motion .post-body,
+  .use-motion .collection-header { opacity: initial; }
+
+  .use-motion .site-title,
+  .use-motion .site-subtitle {
+    opacity: initial;
+    top: initial;
+  }
+
+  .use-motion .logo-line-before i { left: initial; }
+  .use-motion .logo-line-after i { right: initial; }
+  </style>
+</noscript>
+
+</head>
+
+<body itemscope itemtype="http://schema.org/WebPage">
+  <div class="container use-motion">
+    <div class="headband"></div>
+
+    <header class="header" itemscope itemtype="http://schema.org/WPHeader">
+      <div class="header-inner"><div class="site-brand-container">
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="切换导航栏">
+      <span class="toggle-line toggle-line-first"></span>
+      <span class="toggle-line toggle-line-middle"></span>
+      <span class="toggle-line toggle-line-last"></span>
+    </div>
+  </div>
+
+  <div class="site-meta">
+
+    <a href="/" class="brand" rel="start">
+      <span class="logo-line-before"><i></i></span>
+      <h1 class="site-title">笨小康的博客</h1>
+      <span class="logo-line-after"><i></i></span>
+    </a>
+      <p class="site-subtitle" itemprop="description">星辰大海, 如期而至</p>
+  </div>
+
+  <div class="site-nav-right">
+    <div class="toggle popup-trigger">
+        <i class="fa fa-search fa-fw fa-lg"></i>
+    </div>
+  </div>
+</div>
+
+
+
+
+<nav class="site-nav">
+  <ul id="menu" class="main-menu menu">
+        <li class="menu-item menu-item-home">
+
+    <a href="/" rel="section"><i class="fa fa-home fa-fw"></i>首页</a>
+
+  </li>
+        <li class="menu-item menu-item-archives">
+
+    <a href="/archives/" rel="section"><i class="fa fa-archive fa-fw"></i>归档</a>
+
+  </li>
+        <li class="menu-item menu-item-categories">
+
+    <a href="/categories/" rel="section"><i class="fa fa-th fa-fw"></i>分类</a>
+
+  </li>
+        <li class="menu-item menu-item-tags">
+
+    <a href="/tags/" rel="section"><i class="fa fa-tags fa-fw"></i>标签云</a>
+
+  </li>
+        <li class="menu-item menu-item-photography">
+
+    <a href="/categories/photography/" rel="section"><i class="fa fa-camera fa-fw"></i>摄影集</a>
+
+  </li>
+        <li class="menu-item menu-item-flomo">
+
+    <a href="/categories/flomo/" rel="section"><i class="fa fa-lightbulb fa-fw"></i>随想录</a>
+
+  </li>
+        <li class="menu-item menu-item-about">
+
+    <a href="/about/" rel="section"><i class="fa fa-user fa-fw"></i>关于我</a>
+
+  </li>
+      <li class="menu-item menu-item-search">
+        <a role="button" class="popup-trigger"><i class="fa fa-search fa-fw"></i>搜文章
+        </a>
+      </li>
+  </ul>
+</nav>
+
+
+
+  <div class="search-pop-overlay">
+    <div class="popup search-popup">
+        <div class="search-header">
+  <span class="search-icon">
+    <i class="fa fa-search"></i>
+  </span>
+  <div class="search-input-container">
+    <input autocomplete="off" autocapitalize="off"
+           placeholder="搜索..." spellcheck="false"
+           type="search" class="search-input">
+  </div>
+  <span class="popup-btn-close">
+    <i class="fa fa-times-circle"></i>
+  </span>
+</div>
+<div id="search-result">
+  <div id="no-result">
+    <i class="fa fa-spinner fa-pulse fa-5x fa-fw"></i>
+  </div>
+</div>
+
+    </div>
+  </div>
+
+</div>
+    </header>
+
+    
+  <div class="back-to-top">
+    <i class="fa fa-arrow-up"></i>
+    <span>0%</span>
+  </div>
+  <div class="reading-progress-bar"></div>
+
+
+    <main class="main">
+      <div class="main-inner">
+        <div class="content-wrap">
+          
+
+          <div class="content post posts-expand">
+            
+
+    
+  
+  
+  <article itemscope itemtype="http://schema.org/Article" class="post-block" lang="zh-CN">
+    <link itemprop="mainEntityOfPage" href="http://yoursite.com/2021/11/16/YARN%E8%81%9A%E5%90%88%E6%97%A5%E5%BF%97%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90%E5%8F%8A%E4%BC%98%E5%8C%96/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/images/avatar.gif">
+      <meta itemprop="name" content="笨小康">
+      <meta itemprop="description" content="">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="笨小康的博客">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          YARN聚合日志源码分析及优化
+        </h1>
+
+        <div class="post-meta">
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-calendar"></i>
+              </span>
+              <span class="post-meta-item-text">发表于</span>
+
+              <time title="创建时间：2021-11-16 23:31:30" itemprop="dateCreated datePublished" datetime="2021-11-16T23:31:30+08:00">2021-11-16</time>
+            </span>
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-folder"></i>
+              </span>
+              <span class="post-meta-item-text">分类于</span>
+                <span itemprop="about" itemscope itemtype="http://schema.org/Thing">
+                  <a href="/categories/YARN/" itemprop="url" rel="index"><span itemprop="name">YARN</span></a>
+                </span>
+            </span>
+
+          
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody">
+
+      
+        <p>线上集群 Container 日志上报的事务集群 namenode rpc 持续飙高，影响到了 YARN 分配 Container 的性能，任务提交数下降，导致整个集群的吞吐量下降。</p>
+<p>这是由于作业提交到 YARN 集群时，每个 NM 节点都会对每个 app 作业进行日志聚合操作，该操作包括初始化日志聚合服务、检测和创建日志聚合的 HDFS 目录、创建日志聚合线程执行本地日志的上传。其中，初始化日志聚合服务就是简单的对象创建，不和 HDFS 交互，基本无压力；检测和创建日志聚合的 HDFS 目录会执行 HDFS 读和写请求，并且是同步阻塞执行，依赖写 /tmp/logs/ 目录所在集群的 HDFS 服务；创建日志聚合线程上传本地日志，代码中该线程是通过线程池异步创建，不存在阻塞，但固定大小的线程池可能会出现线程创建阻塞。</p>
+<p>根据以上分析，针对日志聚合依赖读写 HDFS 数据反向影响作业的提交问题，主要有两种解决方案：</p>
+<ul>
+<li>作业提交不依赖日志聚合对 HDFS 服务的读/写。（本文主要解决这一问题）</li>
+<li>日志聚合写 HDFS 进行分流，写到多个 HDFS 集群。</li>
+</ul>
+<h1 id="1-聚合日志介绍"><a href="#1-聚合日志介绍" class="headerlink" title="1. 聚合日志介绍"></a>1. 聚合日志介绍</h1><p>日志聚集是 YARN 提供的日志中央化管理功能，它能将运行完成的 Container 任务日志上传到 HDFS 上，从而减轻 NodeManager 负载，且提供一个中央化存储和分析机制。默认情况下，Container 任务日志存在在各个 NodeManager 的本地磁盘上，保存在 <code>yarn.nodemanager.log-dirs</code>参数配置的目录下，保存的时间由 <code>yarn.nodemanager.log.retain-seconds</code> 参数决定（默认时3小时）。若启用日志聚集功能，会将作业完成的日志上传到 HDFS 的 <code>$&#123;yarn.nodemanager.remote-app-log-dir&#125;/$&#123;user&#125;/$&#123;yarn.nodemanager.remote-app-log-dir-suffix&#125; </code>下，要实现日志聚合功能，需要额外的配置。</p>
+<p>这里的日志存储的就是具体 Mapreduce 和 Spark 任务的日志，包括框架的和应用程序里自己打印的。这日志聚合是用来看日志的，而 job history server 则是用来看某个application 的大致统计信息的，包括作业启停时间，map 任务数，reduce 任务数以及各种计数器的值等等。job history server 是抽象概要性的统计信息，而聚合日志是该application 所有任务节点的详细日志集合。</p>
+<h1 id="2-聚合日志生命周期"><a href="#2-聚合日志生命周期" class="headerlink" title="2. 聚合日志生命周期"></a>2. 聚合日志生命周期</h1><p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/16/6d487d41f9fb51ce956ff7f2877ff802-1637065327727-58de5ef3-1b51-4f9d-809d-95a468c82d44-678b84.png" alt="img"></p>
+<center>YARN 聚合日志上传流程</center>
+
+<p>YARN 作业在运行过程中，聚合日志的生命周期如上图，大致分为以下四个步骤：</p>
+<ol>
+<li><p>作业运行过程中，日志将暂存于 <code>yarn.nodemanager.log-dirs</code> 配置项指定的本地路径下，默认为 <code>/var/log/hadoop-yarn/container/</code>。</p>
+</li>
+<li><p>作业运行结束后（无论正常结束与否），将持久化日志到 <code>yarn.nodemanager.remote-app-log-dir</code> 和 <code>yarn.nodemanager.remote-app-log-dir-suffix</code> 配置项指定的 HDFS 路径下，前者默认为 <code>/tmp/logs/</code>，后者默认为 <code>logs</code>。对应 HDFS 的实际路径为 <code>$&#123;yarn.nodemanager.remote-app-log-dir&#125;/$&#123;user&#125;/$&#123;yarn.nodemanager.remote-app-log-dir-suffix&#125;/$&#123;application_id&#125;/</code>，即 <code>/tmp/logs/&lt;user&gt;/logs/</code>。控制日志聚合操作的服务为 LogAggregationService，具体上传日志到 HDFS 的行为由 LogAggregationService 服务创建的 AppLogAggregator 线程执行。</p>
+</li>
+<li><p>日志持久化聚合到 HDFS 后，会删除本地的暂存日志。</p>
+</li>
+<li><p>聚合上传到 HDFS 的日志也是有保留周期的，保存周期由 <code>yarn.log-aggregation.retain-seconds</code> 参数控制，集群可配置。</p>
+</li>
+</ol>
+<h1 id="3-聚合日志参数"><a href="#3-聚合日志参数" class="headerlink" title="3. 聚合日志参数"></a>3. 聚合日志参数</h1><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line">参数：yarn.nodemanager.log-dirs</span><br><span class="line">参数解释：日志存放地址（可配置多个目录）。</span><br><span class="line">默认值：$&#123;yarn.log.dir&#125;/userlogs</span><br><span class="line"></span><br><span class="line">参数：yarn.log-aggregation-enable</span><br><span class="line">参数解释：是否启用日志聚集功能。</span><br><span class="line">默认值：false</span><br><span class="line"></span><br><span class="line">参数：yarn.log-aggregation.retain-seconds</span><br><span class="line">参数解释：在HDFS上聚集的日志最多保存多长时间。</span><br><span class="line">默认值：-1</span><br><span class="line"></span><br><span class="line">参数：yarn.log-aggregation.retain-check-interval-seconds</span><br><span class="line">参数解释：多长时间检查一次日志，并将满足条件的删除，如果是0或者负数，则为上一个值的1/10。</span><br><span class="line">默认值：-1</span><br><span class="line"></span><br><span class="line">参数：yarn.nodemanager.remote-app-log-dir</span><br><span class="line">参数解释：当应用程序运行结束后，日志被转移到的HDFS目录（启用日志聚集功能时有效）。</span><br><span class="line">默认值：/tmp/logs</span><br><span class="line"></span><br><span class="line">参数：yarn.nodemanager.remote-app-log-dir-suffix</span><br><span class="line">参数解释：远程日志目录子目录名称（启用日志聚集功能时有效）。</span><br><span class="line">默认值：logs 日志将被转移到目录$&#123;yarn.nodemanager.remote-app-log-dir&#125;/$&#123;user&#125;/$&#123;thisParam&#125;下</span><br><span class="line"></span><br><span class="line">参数：yarn.nodemanager.log.retain-seconds</span><br><span class="line">参数解释：NodeManager上日志最多存放时间（不启用日志聚集功能时有效）。</span><br><span class="line">默认值：10800（3小时）</span><br></pre></td></tr></table></figure>
+
+<h1 id="4-技术方案调研"><a href="#4-技术方案调研" class="headerlink" title="4. 技术方案调研"></a>4. 技术方案调研</h1><p><a target="_blank" rel="noopener" href="https://mp.weixin.qq.com/s/0ffysIzzJIFLcyg2bXfwSQ">YARN 在字节跳动的优化与实践</a></p>
+<blockquote>
+<p>将 HDFS 做成弱依赖 对于一般的离线批处理来说，如果 HDFS 服务不可用了，那么 YARN 也没必要继续运行了。但是在字节跳动内部由于 YARN 还同时承载流式作业和模型训练，因此不能容忍 HDFS 故障影响到 YARN。为此，我们通过将 NodeLabel 存储到 ZK 中，将 Container Log 在 HDFS 的目录初始化和上传都改为异步的方式，摆脱了对 HDFS 的强依赖。</p>
+</blockquote>
+<p><a target="_blank" rel="noopener" href="https://mp.weixin.qq.com/s/z5HzYSqc2zHmd-DDBVcG4w">YARN 在快手的应用实践与技术演进之路</a></p>
+<blockquote>
+<p>HDFS是yarn非常底层的基础设施，ResourceManager事件处理逻辑中有一些HDFS操作，HDFS卡一下，会造成整个事件处理逻辑卡住，最终整个集群卡住。分析发现RM对HDFS的操作主要集中在失败APP的处理，不是非常核心的逻辑，解决方案也比较简单粗暴，把HDFS的操作从同步改成异步。我们还对整个yarn事件处理逻辑进行排查，发现有一些像DNS的操作，在某些情况下也会比较卡，我们就把这种比较重IO的操作进行相应的优化，确保事件处理逻辑中都是快速的CPU操作，保证事件处理的高效和稳定。</p>
+</blockquote>
+<p><a target="_blank" rel="noopener" href="https://www.infoq.cn/article/pmlsDrWfcjZBxj2P97S1">基于 Hadoop 的 58 同城离线计算平台设计与实践</a></p>
+<blockquote>
+<p>虽然有 Fedoration 机制来均衡各个 NN 的压力，但是对于单个 NN 压力仍然非常大，各种问题时刻在挑战 HDFS 稳定性，比如：NN RPC 爆炸，我们线上最大的 NS 有 15 亿的 RPC 调用，4000+ 并发连接请求，如此高的连接请求对业务稳定影响很大。针对这个问题，我们使用”拆解+优化”的两种手段相结合的方式来改进。拆解就是说我们把一些大的访问，能不能拆解到不同的集群上，或者我们能不能做些控制，具体案例如下： 1.Hive Scratch：我们经过分析 Hive Scratch 的临时目录在 RPC 调用占比中达到 20%，对于 Hive Scratch 实际上每个业务不需要集中到一个 NS 上，我们把它均衡到多个 NS 上。 2.Yarn 日志聚合：Yarn 的日志聚合主要是给业务查看一些日志，实际上他没有必要那个聚合到 HDFS 上，只需要访问本地就可以了。ResourceLocalize：同样把它均衡到各个 NS 上。</p>
+</blockquote>
+<p><a target="_blank" rel="noopener" href="https://tech.meituan.com/2017/04/14/hdfs-federation.html">HDFS Federation在美团点评的应用与改进</a></p>
+<blockquote>
+<p>计算引擎（包括MapReduce和Spark）在提交作业时，会向NameNode发送RPC，获取HDFS Token。在ViewFileSystem中，会向所有namespace串行的申请Token，如果某个namespace的NameNode负载很高，或者发生故障，则任务无法提交，YARN的ResourceManager在renew Token时，也会受此影响。随着美团点评的发展YARN作业并发量也在逐渐提高，保存在HDFS上的YARN log由于QPS过高，被拆分为独立的namespace。但由于其并发和YARN container并发相同，NameNode读写压力还是非常大，经常导致其RPC队列打满，请求超时，进而影响了作业的提交。针对此问题，我们做出了一下改进： 1.container日志由NodeManager通过impersonate写入HDFS，这样客户端在提交Job时，就不需要YARN log所在namespace的Token。 2.ViewFileSystem在获取Token时，增加了参数，用于指定不获取哪些namespace的Token。 3.由于作业并不总是需要所有namespace中的数据，因此当单个namespace故障时，不应当影响其他namespace数据的读写，否则会降低整个集群的分区容忍性和可用性，ViewFileSystem在获取Token时，即使失败，也不影响作业提交，而是在真正访问数据时作业失败，这样在不需要的Token获取失败时，不影响作业的运行。 另外，客户端获取到的Token会以namespace为key，保存在一个自定义数据结构中（Credentials）。ResourceManager renew时，遍历这个数据结构。而NodeManager在拉取JAR包时，根据本地配置中的namespace名去该数据结构中获取对应Token。因此需要注意的是，虽然namespace配置和服务端不同不影响普通HDFS读写，但提交作业所使用的namespace配置需要与NodeManager相同，至少会用到的namespace配置需要是一致的。</p>
+</blockquote>
+<p>本文主要针对字节跳动的思路对日志聚合逻辑进行优化，将日志聚合读写 HDFS 集群改为弱依赖。</p>
+<h1 id="5-YARN日志聚合源码分析"><a href="#5-YARN日志聚合源码分析" class="headerlink" title="5. YARN日志聚合源码分析"></a>5. YARN日志聚合源码分析</h1><p>要弄清楚聚合日志如何工作的，就需要了解 YARN 中处理聚合日志的服务在哪里创建的，根据 <a target="_blank" rel="noopener" href="https://benkoons.github.io/2021/11/07/YARN-ApplicationMaster%E5%90%AF%E5%8A%A8%E5%8E%9F%E7%90%86%E4%B8%8E%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/">YARN ApplicationMaster启动原理与源码分析</a> 文章分析，我们知道 YARN 的第一个 Container 启动是用于 AppAttmpt 角色，也就是我们通常在 YARN UI 界面看到的 ApplicationMaster 服务。所以我们来看看一个作业的第一个 Container 是如何启动以及如何创建日志记录组件 LogHandler 的。</p>
+<p>ApplicationMaster 通过调用 RPC 函数 ContainerManagementProtocol#startContainers() 开始启动 Container，即 startContainerInternal() 方法，这部分逻辑做了两件事：</p>
+<ul>
+<li>发送 ApplicationEventType.INIT_APPLICATION 事件，对应用程序资源的初始化，主要是初始化各类必需的服务组件（如日志记录组件 LogHandler、资源状态追踪组件 LocalResourcesTrackerImpl等），供后续 Container 启动，通常来自 ApplicationMaster 的第一个 Container 完成，这里的 if 逻辑针对一个 NM 节点上运行作业的所有 Containers 只调用一次，后续的 Container 跳过这段 Application 初始化过程。</li>
+<li>发送 ApplicationEventType.INIT_CONTAINER 事件，对 Container 进行初始化操作。（这部分事件留在 Container 启动环节介绍）</li>
+</ul>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/nodemanager/containermanager/ContainerManagerImpl.java</span></span><br><span class="line">  <span class="function"><span class="keyword">private</span> <span class="keyword">void</span> <span class="title">startContainerInternal</span><span class="params">(NMTokenIdentifier nmTokenIdentifier,</span></span></span><br><span class="line"><span class="params"><span class="function">      ContainerTokenIdentifier containerTokenIdentifier,</span></span></span><br><span class="line"><span class="params"><span class="function">      StartContainerRequest request)</span> <span class="keyword">throws</span> YarnException, IOException </span>&#123;</span><br><span class="line"> </span><br><span class="line">    <span class="comment">// 省略Token认证及ContainerLaunchContext上下文初始化</span></span><br><span class="line"> </span><br><span class="line">    <span class="keyword">this</span>.readLock.lock();</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">      <span class="keyword">if</span> (!serviceStopped) &#123;</span><br><span class="line">        <span class="comment">// Create the application</span></span><br><span class="line">        Application application =</span><br><span class="line">            <span class="keyword">new</span> ApplicationImpl(dispatcher, user, applicationID, credentials, context);</span><br><span class="line">         </span><br><span class="line">        <span class="comment">// 应用程序的初始化，供后续Container使用，这个逻辑只调用一次，通常由来自ApplicationMaster的第一个Container完成</span></span><br><span class="line">        <span class="keyword">if</span> (<span class="keyword">null</span> == context.getApplications().putIfAbsent(applicationID,</span><br><span class="line">          application)) &#123;</span><br><span class="line">          LOG.info(<span class="string">&quot;Creating a new application reference for app &quot;</span> + applicationID);</span><br><span class="line">          LogAggregationContext logAggregationContext =</span><br><span class="line">              containerTokenIdentifier.getLogAggregationContext();</span><br><span class="line">          Map&lt;ApplicationAccessType, String&gt; appAcls =</span><br><span class="line">              container.getLaunchContext().getApplicationACLs();</span><br><span class="line">          context.getNMStateStore().storeApplication(applicationID,</span><br><span class="line">              buildAppProto(applicationID, user, credentials, appAcls,</span><br><span class="line">                logAggregationContext));</span><br><span class="line"> </span><br><span class="line"> </span><br><span class="line">          <span class="comment">// 1.向 ApplicationImpl 发送 ApplicationEventType.INIT_APPLICATION 事件</span></span><br><span class="line">          dispatcher.getEventHandler().handle(</span><br><span class="line">            <span class="keyword">new</span> ApplicationInitEvent(applicationID, appAcls,</span><br><span class="line">              logAggregationContext));</span><br><span class="line">        &#125;</span><br><span class="line"> </span><br><span class="line">        <span class="comment">// 2.向 ApplicationImpl 发送 ApplicationEventType.INIT_CONTAINER 事件</span></span><br><span class="line">        <span class="keyword">this</span>.context.getNMStateStore().storeContainer(containerId, request);</span><br><span class="line">        dispatcher.getEventHandler().handle(</span><br><span class="line">          <span class="keyword">new</span> ApplicationContainerInitEvent(container));</span><br><span class="line"> </span><br><span class="line">        <span class="keyword">this</span>.context.getContainerTokenSecretManager().startContainerSuccessful(</span><br><span class="line">          containerTokenIdentifier);</span><br><span class="line">        NMAuditLogger.logSuccess(user, AuditConstants.START_CONTAINER,</span><br><span class="line">          <span class="string">&quot;ContainerManageImpl&quot;</span>, applicationID, containerId);</span><br><span class="line">        <span class="comment">// TODO launchedContainer misplaced -&gt; doesn&#x27;t necessarily mean a container</span></span><br><span class="line">        <span class="comment">// launch. A finished Application will not launch containers.</span></span><br><span class="line">        metrics.launchedContainer();</span><br><span class="line">        metrics.allocateContainer(containerTokenIdentifier.getResource());</span><br><span class="line">      &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        <span class="keyword">throw</span> <span class="keyword">new</span> YarnException(</span><br><span class="line">            <span class="string">&quot;Container start failed as the NodeManager is &quot;</span> +</span><br><span class="line">            <span class="string">&quot;in the process of shutting down&quot;</span>);</span><br><span class="line">      &#125;</span><br><span class="line">    &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">      <span class="keyword">this</span>.readLock.unlock();</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+
+
+<p>这里主要看看第1件事情，即向 ApplicationImpl 发送 ApplicationEventType.INIT_APPLICATION 事件，事件对应的状态机为 AppInitTransition 状态机。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/nodemanager/containermanager/application/ApplicationImpl.java</span></span><br><span class="line"><span class="comment">// Transitions from NEW state</span></span><br><span class="line">           .addTransition(ApplicationState.NEW, ApplicationState.INITING,</span><br><span class="line">               ApplicationEventType.INIT_APPLICATION, <span class="keyword">new</span> AppInitTransition())</span><br></pre></td></tr></table></figure>
+
+
+
+<p>AppInitTransition 状态机会对日志聚合组件服务进行初始化，关键行动是向调度器发送 LogHandlerEventType.APPLICATION_STARTED 事件。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/nodemanager/containermanager/application/ApplicationImpl.java</span></span><br><span class="line">  <span class="comment">/**</span></span><br><span class="line"><span class="comment">   * Notify services of new application.</span></span><br><span class="line"><span class="comment">   * </span></span><br><span class="line"><span class="comment">   * In particular, this initializes the &#123;<span class="doctag">@link</span> LogAggregationService&#125;</span></span><br><span class="line"><span class="comment">   */</span></span><br><span class="line">  <span class="meta">@SuppressWarnings(&quot;unchecked&quot;)</span></span><br><span class="line">  <span class="keyword">static</span> <span class="class"><span class="keyword">class</span> <span class="title">AppInitTransition</span> <span class="keyword">implements</span></span></span><br><span class="line"><span class="class">      <span class="title">SingleArcTransition</span>&lt;<span class="title">ApplicationImpl</span>, <span class="title">ApplicationEvent</span>&gt; </span>&#123;</span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">transition</span><span class="params">(ApplicationImpl app, ApplicationEvent event)</span> </span>&#123;</span><br><span class="line">      ApplicationInitEvent initEvent = (ApplicationInitEvent)event;</span><br><span class="line">      app.applicationACLs = initEvent.getApplicationACLs();</span><br><span class="line">      app.aclsManager.addApplication(app.getAppId(), app.applicationACLs);</span><br><span class="line"></span><br><span class="line">      <span class="comment">// 初始化日志聚合组件服务</span></span><br><span class="line">      <span class="comment">// Inform the logAggregator</span></span><br><span class="line">      app.logAggregationContext = initEvent.getLogAggregationContext();</span><br><span class="line">      <span class="comment">// 向调度器发送 LogHandlerEventType.APPLICATION_STARTED 事件</span></span><br><span class="line">      app.dispatcher.getEventHandler().handle(</span><br><span class="line">          <span class="keyword">new</span> LogHandlerAppStartedEvent(app.appId, app.user,</span><br><span class="line">              app.credentials, ContainerLogsRetentionPolicy.ALL_CONTAINERS,</span><br><span class="line">              app.applicationACLs, app.logAggregationContext)); </span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+
+
+<p>想要弄清楚 LogHandlerEventType.APPLICATION_STARTED 事件做了什么，就要知道 LogHandlerEventType 类注册的事件处理器是什么以及事件处理器做了什么事情。这里的 register 方法对 LogHandlerEventType 类进行了注册，对应的 logHandler 事件处理器为 LogAggregationService 服务。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/nodemanager/containermanager/ContainerManagerImpl.java</span></span><br><span class="line">  <span class="meta">@Override</span></span><br><span class="line">  <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">serviceInit</span><span class="params">(Configuration conf)</span> <span class="keyword">throws</span> Exception </span>&#123;</span><br><span class="line">    <span class="comment">// 定义日志处理器</span></span><br><span class="line">    LogHandler logHandler =</span><br><span class="line">      createLogHandler(conf, <span class="keyword">this</span>.context, <span class="keyword">this</span>.deletionService);</span><br><span class="line">    addIfService(logHandler);</span><br><span class="line">    <span class="comment">// 注册 LogHandlerEventType 事件，logHandler 为对应的处理器</span></span><br><span class="line">    dispatcher.register(LogHandlerEventType.class, logHandler);</span><br><span class="line">    </span><br><span class="line">    waitForContainersOnShutdownMillis =</span><br><span class="line">        conf.getLong(YarnConfiguration.NM_SLEEP_DELAY_BEFORE_SIGKILL_MS,</span><br><span class="line">            YarnConfiguration.DEFAULT_NM_SLEEP_DELAY_BEFORE_SIGKILL_MS) +</span><br><span class="line">        conf.getLong(YarnConfiguration.NM_PROCESS_KILL_WAIT_MS,</span><br><span class="line">            YarnConfiguration.DEFAULT_NM_PROCESS_KILL_WAIT_MS) +</span><br><span class="line">        SHUTDOWN_CLEANUP_SLOP_MS;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">super</span>.serviceInit(conf);</span><br><span class="line">    recover();</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+
+
+<p>具体创建 logHandler 对象的调用，由于集群开启了日志聚合功能（由参数 <code>yarn.log-aggregation-enable</code> 控制），这里返回 LogAggregationService 服务。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/nodemanager/containermanager/ContainerManagerImpl.java</span></span><br><span class="line">    <span class="function"><span class="keyword">protected</span> LogHandler <span class="title">createLogHandler</span><span class="params">(Configuration conf, Context context,</span></span></span><br><span class="line"><span class="params"><span class="function">      DeletionService deletionService)</span> </span>&#123;</span><br><span class="line">    <span class="keyword">if</span> (conf.getBoolean(YarnConfiguration.LOG_AGGREGATION_ENABLED,</span><br><span class="line">        YarnConfiguration.DEFAULT_LOG_AGGREGATION_ENABLED)) &#123;</span><br><span class="line">      <span class="comment">// 判断是否启用了日志聚合，由于集群开启了日志聚合，这里初始化 LogAggregationService 服务</span></span><br><span class="line">      <span class="keyword">return</span> <span class="keyword">new</span> LogAggregationService(<span class="keyword">this</span>.dispatcher, context,</span><br><span class="line">          deletionService, dirsHandler);</span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">      <span class="keyword">return</span> <span class="keyword">new</span> NonAggregatingLogHandler(<span class="keyword">this</span>.dispatcher, deletionService,</span><br><span class="line">                                          dirsHandler,</span><br><span class="line">                                          context.getNMStateStore());</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+
+
+<p>弄清楚了 LogHandlerEventType 类注册的服务是 LogAggregationService，我们就进入 LogAggregationService 类的 handle() 方法，看看上面的 LogHandlerEventType.APPLICATION_STARTED 事件做了什么事。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/nodemanager/containermanager/logaggregation/LogAggregationService.java</span></span><br><span class="line">  <span class="meta">@Override</span></span><br><span class="line">  <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">handle</span><span class="params">(LogHandlerEvent event)</span> </span>&#123;</span><br><span class="line">    <span class="keyword">switch</span> (event.getType()) &#123;</span><br><span class="line">      <span class="comment">// APPLICATION_STARTED 事件处理流程</span></span><br><span class="line">      <span class="keyword">case</span> APPLICATION_STARTED:</span><br><span class="line">        LogHandlerAppStartedEvent appStartEvent =</span><br><span class="line">            (LogHandlerAppStartedEvent) event;</span><br><span class="line">        initApp(appStartEvent.getApplicationId(), appStartEvent.getUser(),</span><br><span class="line">            appStartEvent.getCredentials(),</span><br><span class="line">            appStartEvent.getLogRetentionPolicy(),</span><br><span class="line">            appStartEvent.getApplicationAcls(),</span><br><span class="line">            appStartEvent.getLogAggregationContext());</span><br><span class="line">        <span class="keyword">break</span>;</span><br><span class="line">      <span class="keyword">case</span> CONTAINER_FINISHED:</span><br><span class="line">        <span class="comment">// 省略</span></span><br><span class="line">      <span class="keyword">case</span> APPLICATION_FINISHED:</span><br><span class="line">        <span class="comment">//省略</span></span><br><span class="line">      <span class="keyword">default</span>:</span><br><span class="line">        ; <span class="comment">// Ignore</span></span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+
+
+<p>LogHandlerEventType.APPLICATION_STARTED 事件的关键逻辑在 initApp() 方法的调用。这段逻辑主要做了三件事：</p>
+<ol>
+<li><p>判断 HDFS 上日志聚合的根目录是否存在，即 <code>/tmp/logs/</code> 目录（具体为 <code>hdfs://nameservice/tmp/logs/</code>)，由参数 <code>yarn.nodemanager.remote-app-log-dir</code> 控制。（注意：这里的请求会阻塞读 HDFS）</p>
+</li>
+<li><p>创建作业日志聚合的 HDFS 目录，并初始化 app 日志聚合实例，采用线程池的方式启动日志聚合进程。（重点，这里会有请求阻塞写 HDFS，并且通过有限大小的线程池异步创建日志聚合线程去做日志的聚合）</p>
+</li>
+<li><p>根据构建的 ApplicationEvent 事件，向发送 ApplicationEventType.APPLICATION_LOG_HANDLING_INITED 事件，告知处理器日志聚合服务初始化完成。</p>
+</li>
+</ol>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/nodemanager/containermanager/logaggregation/LogAggregationService.java</span></span><br><span class="line">  <span class="function"><span class="keyword">private</span> <span class="keyword">void</span> <span class="title">initApp</span><span class="params">(<span class="keyword">final</span> ApplicationId appId, String user,</span></span></span><br><span class="line"><span class="params"><span class="function">      Credentials credentials, ContainerLogsRetentionPolicy logRetentionPolicy,</span></span></span><br><span class="line"><span class="params"><span class="function">      Map&lt;ApplicationAccessType, String&gt; appAcls,</span></span></span><br><span class="line"><span class="params"><span class="function">      LogAggregationContext logAggregationContext)</span> </span>&#123;</span><br><span class="line">    ApplicationEvent eventResponse;</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">      <span class="comment">// 1、 判断 HDFS 上日志聚合的根目录是否存在，即 `/tmp/logs/` 目录（具体为 `hdfs://nameservice/tmp/logs`)，由参数 `yarn.nodemanager.remote-app-log-dir` 控制</span></span><br><span class="line">      verifyAndCreateRemoteLogDir(getConfig());</span><br><span class="line">      <span class="comment">// 重点：2、创建作业日志聚合的 HDFS 目录，并初始化 app 日志聚合实例，采用线程池的方式启动日志聚合进程</span></span><br><span class="line">      initAppAggregator(appId, user, credentials, logRetentionPolicy, appAcls,</span><br><span class="line">          logAggregationContext);</span><br><span class="line">      <span class="comment">// 构建 ApplicationEvent 事件</span></span><br><span class="line">      eventResponse = <span class="keyword">new</span> ApplicationEvent(appId,</span><br><span class="line">          ApplicationEventType.APPLICATION_LOG_HANDLING_INITED);</span><br><span class="line">    &#125; <span class="keyword">catch</span> (YarnRuntimeException e) &#123;</span><br><span class="line">      LOG.warn(<span class="string">&quot;Application failed to init aggregation&quot;</span>, e);</span><br><span class="line">      eventResponse = <span class="keyword">new</span> ApplicationEvent(appId,</span><br><span class="line">          ApplicationEventType.APPLICATION_LOG_HANDLING_FAILED);</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="comment">// 3、根据构建的 ApplicationEvent 事件，向发送 ApplicationEventType.APPLICATION_LOG_HANDLING_INITED 事件，告知处理器日志聚合服务初始化完成</span></span><br><span class="line">    <span class="keyword">this</span>.dispatcher.getEventHandler().handle(eventResponse);</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+
+
+<p>第一件事比较简单，主要是是判断 HDFS 聚合日志的根目录是否存在，由于目录一般都存在，这一块主要是读 HDFS 请求。我们主要来看看 initApp() 方法做的第二件事，可以看到第三件事是发送 ApplicationEventType.APPLICATION_LOG_HANDLING_INITED 事件，表示日志聚合服务初始化完成，包括创建作业在 HDFS 的日志聚合目录和启动日志聚合线程。所以基本可以知道第2件事的 initAppAggregator() 是会创建作业日志聚合目录，并启动日志聚合线程，具体的我们来看代码。</p>
+<p>这段代码其实主要做了两件事：</p>
+<ol>
+<li>调用 createAppDir() 方法执行 HDFS 写请求为作业创建日志聚合的目录，即 <code>hdfs://nameservice/tmp/logs/&lt;user&gt;/logs/</code> 目录，这里的写逻辑如果成功则只调用一次，一般是由第一个 Container 创建（即作业的 ApplicationMaster Container），其他 Container 只执行 HDFS 读请求判断该目录是否存在即可。</li>
+<li>通过 threadPool 线程池创建每个作业在 NM 节点的日志聚合线程，异步处理本地日志的上传，该线程池大小由参数 <code>yarn.nodemanager.logaggregation.threadpool-size-max</code> 控制，默认大小为 100。</li>
+</ol>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/nodemanager/containermanager/logaggregation/LogAggregationService.java</span></span><br><span class="line">  <span class="function"><span class="keyword">protected</span> <span class="keyword">void</span> <span class="title">initAppAggregator</span><span class="params">(<span class="keyword">final</span> ApplicationId appId, String user,</span></span></span><br><span class="line"><span class="params"><span class="function">      Credentials credentials, ContainerLogsRetentionPolicy logRetentionPolicy,</span></span></span><br><span class="line"><span class="params"><span class="function">      Map&lt;ApplicationAccessType, String&gt; appAcls,</span></span></span><br><span class="line"><span class="params"><span class="function">      LogAggregationContext logAggregationContext)</span> </span>&#123;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// Get user&#x27;s FileSystem credentials</span></span><br><span class="line">    <span class="keyword">final</span> UserGroupInformation userUgi =</span><br><span class="line">        UserGroupInformation.createRemoteUser(user);</span><br><span class="line">    <span class="keyword">if</span> (credentials != <span class="keyword">null</span>) &#123;</span><br><span class="line">      userUgi.addCredentials(credentials);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// New application</span></span><br><span class="line">    <span class="keyword">final</span> AppLogAggregator appLogAggregator =</span><br><span class="line">        <span class="keyword">new</span> AppLogAggregatorImpl(<span class="keyword">this</span>.dispatcher, <span class="keyword">this</span>.deletionService,</span><br><span class="line">            getConfig(), appId, userUgi, <span class="keyword">this</span>.nodeId, dirsHandler,</span><br><span class="line">            getRemoteNodeLogFileForApp(appId, user), logRetentionPolicy,</span><br><span class="line">            appAcls, logAggregationContext, <span class="keyword">this</span>.context,</span><br><span class="line">            getLocalFileContext(getConfig()));</span><br><span class="line">    <span class="keyword">if</span> (<span class="keyword">this</span>.appLogAggregators.putIfAbsent(appId, appLogAggregator) != <span class="keyword">null</span>) &#123;</span><br><span class="line">      <span class="keyword">throw</span> <span class="keyword">new</span> YarnRuntimeException(<span class="string">&quot;Duplicate initApp for &quot;</span> + appId);</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="comment">// wait until check for existing aggregator to create dirs</span></span><br><span class="line">    YarnRuntimeException appDirException = <span class="keyword">null</span>;</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">      <span class="comment">// 创建作业日志聚合目录，即 hdfs://nameservice/tmp/logs/&lt;user&gt;/logs/ 目录</span></span><br><span class="line">      <span class="comment">// Create the app dir</span></span><br><span class="line">      createAppDir(user, appId, userUgi);</span><br><span class="line">    &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">      appLogAggregator.disableLogAggregation();</span><br><span class="line">      <span class="keyword">if</span> (!(e <span class="keyword">instanceof</span> YarnRuntimeException)) &#123;</span><br><span class="line">        appDirException = <span class="keyword">new</span> YarnRuntimeException(e);</span><br><span class="line">      &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        appDirException = (YarnRuntimeException)e;</span><br><span class="line">      &#125;</span><br><span class="line">      appLogAggregators.remove(appId);</span><br><span class="line">      closeFileSystems(userUgi);</span><br><span class="line">      <span class="keyword">throw</span> appDirException;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 创建作业的日志聚合线程，并通过线程池启动日志聚合线程，异步上传 NM 节点的日志</span></span><br><span class="line">    <span class="comment">// Schedule the aggregator.</span></span><br><span class="line">    Runnable aggregatorWrapper = <span class="keyword">new</span> Runnable() &#123;</span><br><span class="line">      <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">run</span><span class="params">()</span> </span>&#123;</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">          appLogAggregator.run();</span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">          appLogAggregators.remove(appId);</span><br><span class="line">          closeFileSystems(userUgi);</span><br><span class="line">        &#125;</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;;</span><br><span class="line">    <span class="keyword">this</span>.threadPool.execute(aggregatorWrapper);</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>至此，从日志聚合服务组件的创建，到为作业初始化 HDFS 聚合日志目录，到启动日志聚合线程，整个日志聚合的调用逻辑已介绍完毕，日志的具体上传逻辑在 AppLogAggregatorImpl 类的 run() 方法开始执行，具体上传这里不做详细介绍，感兴趣可以可以去看看上传行为是如何做的。</p>
+<h1 id="6-优化方案"><a href="#6-优化方案" class="headerlink" title="6. 优化方案"></a>6. 优化方案</h1><p>在背景介绍中，提到了日志聚合操作存在风险的点主要在读/写 HDFS 请求所在的集群 namenode rpc 压力，和固定大小的线程池创建线程的阻塞，代码的修改逻辑也是结合这两个问题诞生的。</p>
+<ul>
+<li>针对读/写 HDFS 请求的 rpc 压力，代码将日志聚合逻辑中与 HDFS 交互的方式全部改为异步处理，不依赖日志聚合读写数据的 HDFS 集群。</li>
+<li>针对固定大小线程池创建线程可能出现的阻塞情况，代码将这一块修改为生产者-消费者模式，聚合日志线程的产生与线程的处理解耦。</li>
+</ul>
+<h2 id="6-1-读-写-HDFS-请求异步"><a href="#6-1-读-写-HDFS-请求异步" class="headerlink" title="6.1 读/写 HDFS 请求异步"></a>6.1 读/写 HDFS 请求异步</h2><p>日志聚合服务中与 HDFS 交互有两个地方，一个是读操作，判断 HDFS 上 <code>/tmp/logs/</code> 目录是否存在，一个是写操作，创建作业的聚合日志目录 <code>/tmp/logs/&lt;user&gt;/logs/&lt;appid&gt;/</code>，这写操作每个作业只执行一次，后续都是读操作，判断该目录是否存在即可。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/nodemanager/containermanager/logaggregation/LogAggregationService.java</span></span><br><span class="line">  <span class="function"><span class="keyword">private</span> <span class="keyword">void</span> <span class="title">asyncCreateAppDir</span><span class="params">(<span class="keyword">final</span> String user, <span class="keyword">final</span> ApplicationId appId, <span class="keyword">final</span> UserGroupInformation userUgi)</span> </span>&#123;</span><br><span class="line">      <span class="keyword">new</span> Thread() &#123;</span><br><span class="line">        <span class="meta">@Override</span></span><br><span class="line">        <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">run</span><span class="params">()</span> </span>&#123;</span><br><span class="line">	        <span class="keyword">try</span> &#123;</span><br><span class="line">	          <span class="comment">// check dir &#x27;/tmp/logs/&#x27; exists</span></span><br><span class="line">	          verifyAndCreateRemoteLogDir(getConfig());</span><br><span class="line">	          <span class="comment">// create app log dir</span></span><br><span class="line">	          createAppDir(user, appId, userUgi);</span><br><span class="line">	        &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">	          e.printStackTrace();</span><br><span class="line">	        &#125;</span><br><span class="line">        &#125;</span><br><span class="line">      &#125;.start();</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>将日志聚合读写 HDFS 请求改为异步后，可能会产生另外一个问题。由于作业日志聚合目录的创建是异步的，而执行日志上传操作也是异步进行的，这里存在着先后顺序，即必须作业的日志聚合目录已经创建完成，上传操作才能正常进行。因此，在具体执行上传操作时，我们对日志聚合目录是否存在添加一层校验，以确保上传前聚合目录必须存在。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/nodemanager/containermanager/logaggregation/AppLogAggregatorImpl.java</span></span><br><span class="line">  <span class="function"><span class="keyword">private</span> <span class="keyword">void</span> <span class="title">doAppLogAggregation</span><span class="params">()</span> </span>&#123;</span><br><span class="line">    <span class="comment">// 判断作业是否完成，直到作业完成后才跳出 while 逻辑</span></span><br><span class="line">    <span class="keyword">while</span> (!<span class="keyword">this</span>.appFinishing.get() &amp;&amp; !<span class="keyword">this</span>.aborted.get()) &#123;</span><br><span class="line">      <span class="keyword">synchronized</span>(<span class="keyword">this</span>) &#123;</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">          waiting.set(<span class="keyword">true</span>);</span><br><span class="line">          <span class="keyword">if</span> (<span class="keyword">this</span>.rollingMonitorInterval &gt; <span class="number">0</span>) &#123;</span><br><span class="line">            wait(<span class="keyword">this</span>.rollingMonitorInterval * <span class="number">1000</span>);</span><br><span class="line">            <span class="keyword">if</span> (<span class="keyword">this</span>.appFinishing.get() || <span class="keyword">this</span>.aborted.get()) &#123;</span><br><span class="line">              <span class="keyword">break</span>;</span><br><span class="line">            &#125;</span><br><span class="line">            uploadLogsForContainers(<span class="keyword">false</span>);</span><br><span class="line">          &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">            wait(THREAD_SLEEP_TIME);</span><br><span class="line">          &#125;</span><br><span class="line">        &#125; <span class="keyword">catch</span> (InterruptedException e) &#123;</span><br><span class="line">          LOG.warn(<span class="string">&quot;PendingContainers queue is interrupted&quot;</span>);</span><br><span class="line">          <span class="keyword">this</span>.appFinishing.set(<span class="keyword">true</span>);</span><br><span class="line">        &#125;</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (<span class="keyword">this</span>.aborted.get()) &#123;</span><br><span class="line">      <span class="keyword">return</span>;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 改造点：增加日志聚合目录是否存在的校验，如果不存在则创建改目录（具体改造见下面）</span></span><br><span class="line">    <span class="comment">//check remote app dir</span></span><br><span class="line">    checkRemoteDir();</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 关键：执行真正的日志上传动作</span></span><br><span class="line">    <span class="comment">// App is finished, upload the container logs.</span></span><br><span class="line">    uploadLogsForContainers(<span class="keyword">true</span>);</span><br><span class="line"></span><br><span class="line"></span><br><span class="line">    <span class="comment">// 删除作业在 NM 本地目录保存的日志，由 DeletionService 服务负责。</span></span><br><span class="line">    doAppLogAggregationPostCleanUp();</span><br><span class="line"></span><br><span class="line">    <span class="keyword">this</span>.dispatcher.getEventHandler().handle(</span><br><span class="line">        <span class="keyword">new</span> ApplicationEvent(<span class="keyword">this</span>.appId,</span><br><span class="line">            ApplicationEventType.APPLICATION_LOG_HANDLING_FINISHED));</span><br><span class="line">    <span class="keyword">this</span>.appAggregationFinished.set(<span class="keyword">true</span>);</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+
+
+<p><code>checkRemoteDir()</code> 逻辑和前面的 <code>createAppDir(user, appId, userUgi);</code> 逻辑差不多，无非就是在实际上传时再做一次 check 操作。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/nodemanager/containermanager/logaggregation/AppLogAggregatorImpl.java</span></span><br><span class="line">  <span class="comment">// 改造的具体代码如下</span></span><br><span class="line">  <span class="function"><span class="keyword">private</span>  <span class="keyword">void</span> <span class="title">checkRemoteDir</span><span class="params">()</span> </span>&#123;</span><br><span class="line">  <span class="keyword">try</span> &#123;</span><br><span class="line">    userUgi.doAs(<span class="keyword">new</span> PrivilegedExceptionAction&lt;Object&gt;() &#123;</span><br><span class="line">      <span class="meta">@Override</span></span><br><span class="line">      <span class="function"><span class="keyword">public</span> Object <span class="title">run</span><span class="params">()</span> <span class="keyword">throws</span> Exception </span>&#123;</span><br><span class="line">        FileSystem remoteFS = remoteNodeLogFileForApp.getFileSystem(conf);</span><br><span class="line">        <span class="keyword">if</span> (!remoteFS.exists(remoteNodeLogFileForApp.getParent())) &#123;</span><br><span class="line">          <span class="keyword">try</span> &#123;</span><br><span class="line">            FsPermission dirPerm = <span class="keyword">new</span> FsPermission(APP_DIR_PERMISSIONS);</span><br><span class="line">            remoteFS.mkdirs(remoteNodeLogFileForApp.getParent(), dirPerm);</span><br><span class="line">            FsPermission umask = FsPermission.getUMask(remoteFS.getConf());</span><br><span class="line">            <span class="keyword">if</span> (!dirPerm.equals(dirPerm.applyUMask(umask))) &#123;</span><br><span class="line">              remoteFS.setPermission(remoteNodeLogFileForApp.getParent(), dirPerm);</span><br><span class="line">            &#125;</span><br><span class="line">          &#125; <span class="keyword">catch</span> (IOException e) &#123;</span><br><span class="line">            LOG.error(<span class="string">&quot;Failed to setup application log directory for &quot;</span> + appId, e);</span><br><span class="line">            <span class="keyword">throw</span> e;</span><br><span class="line">          &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> <span class="keyword">null</span>;</span><br><span class="line">      &#125;&#125;);</span><br><span class="line">    &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">      <span class="keyword">throw</span> <span class="keyword">new</span> YarnRuntimeException(e);</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="6-2-聚合日志线程的创建和处理解耦"><a href="#6-2-聚合日志线程的创建和处理解耦" class="headerlink" title="6.2 聚合日志线程的创建和处理解耦"></a>6.2 聚合日志线程的创建和处理解耦</h2><p>这一块主要是通过生产者-消费者模式，将日志聚合线程的创建和处理解耦，生产的线程由阻塞队列 logAggregatorQueue 维护，具体的线程消费逻辑由独立线程 LauncherLogAggregatorThread 处理，具体代码如下。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/nodemanager/containermanager/logaggregation/LogAggregationService.java</span></span><br><span class="line">  <span class="function"><span class="keyword">protected</span> <span class="keyword">void</span> <span class="title">initAppAggregator</span><span class="params">(<span class="keyword">final</span> ApplicationId appId, String user,</span></span></span><br><span class="line"><span class="params"><span class="function">      Credentials credentials, ContainerLogsRetentionPolicy logRetentionPolicy,</span></span></span><br><span class="line"><span class="params"><span class="function">      Map&lt;ApplicationAccessType, String&gt; appAcls,</span></span></span><br><span class="line"><span class="params"><span class="function">      LogAggregationContext logAggregationContext)</span> </span>&#123;</span><br><span class="line">    <span class="comment">//省略</span></span><br><span class="line">    </span><br><span class="line">    <span class="comment">// 服务停止时阻塞新请求的接收</span></span><br><span class="line">    <span class="keyword">if</span> (blockNewLogAggr) &#123;</span><br><span class="line">    	<span class="keyword">return</span>;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">	  processed = <span class="keyword">false</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// create the aggregator thread.</span></span><br><span class="line">    Runnable aggregatorWrapper = <span class="keyword">new</span> Runnable() &#123;</span><br><span class="line">      <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">run</span><span class="params">()</span> </span>&#123;</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">          appLogAggregator.run();</span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">          appLogAggregators.remove(appId);</span><br><span class="line">          closeFileSystems(userUgi);</span><br><span class="line">        &#125;</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;;</span><br><span class="line">    <span class="comment">// 改造点：将线程池直接创建线程改为生产-消费模式，这里负责生产日志聚合线程，添加到阻塞队列中</span></span><br><span class="line">	  logAggregatorQueue.add(aggregatorWrapper);</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="comment">// logAggregatorQueue 对象的定义</span></span><br><span class="line">  <span class="keyword">private</span> BlockingQueue&lt;Runnable&gt; logAggregatorQueue = <span class="keyword">new</span> LinkedBlockingQueue&lt;Runnable&gt;();</span><br></pre></td></tr></table></figure>
+
+
+
+<p>定义一个消费者线程，专门用来处理 <code>logAggregatorQueue.add(aggregatorWrapper);</code> 队列中添加的线程任务。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/nodemanager/containermanager/logaggregation/LogAggregationService.java</span></span><br><span class="line">    <span class="comment">// 消费线程停止标志 </span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">volatile</span> <span class="keyword">boolean</span> stopped = <span class="keyword">false</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 是否阻塞新聚合日志的接收，默认不阻塞 false</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">volatile</span> <span class="keyword">boolean</span> blockNewLogAggr = <span class="keyword">false</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 消费队列中对象是否处理完成</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">volatile</span> <span class="keyword">boolean</span> processed = <span class="keyword">true</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 用于线程等待/通知的 syncronized 对象</span></span><br><span class="line">    <span class="keyword">private</span> Object waitForProcess = <span class="keyword">new</span> Object();</span><br><span class="line"> </span><br><span class="line">  <span class="comment">// 改造点：具体的线程消费由单独的线程类控制，实现线程创建和处理的解耦</span></span><br><span class="line">  <span class="keyword">private</span> <span class="class"><span class="keyword">class</span> <span class="title">LauncherLogAggregatorThread</span> <span class="keyword">implements</span> <span class="title">Runnable</span> </span>&#123;</span><br><span class="line"> </span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">run</span><span class="params">()</span> </span>&#123;</span><br><span class="line">      <span class="keyword">while</span> (!stopped &amp;&amp; !Thread.currentThread().isInterrupted()) &#123;</span><br><span class="line">        processed = logAggregatorQueue.isEmpty();</span><br><span class="line">          <span class="keyword">if</span> (blockNewLogAggr) &#123;</span><br><span class="line">              <span class="keyword">synchronized</span> (waitForProcess) &#123;</span><br><span class="line">                  <span class="keyword">if</span> (processed) &#123;</span><br><span class="line">                      waitForProcess.notify();</span><br><span class="line">                  &#125;</span><br><span class="line">              &#125;</span><br><span class="line">          &#125;</span><br><span class="line">        Runnable toLaunch;</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">          <span class="comment">// Schedule the aggregator.</span></span><br><span class="line">          toLaunch = logAggregatorQueue.take();</span><br><span class="line">          threadPool.execute(toLaunch);</span><br><span class="line">        &#125; <span class="keyword">catch</span> (InterruptedException e) &#123;</span><br><span class="line">          LOG.warn(<span class="keyword">this</span>.getClass().getName() + <span class="string">&quot; interrupted. Returning.&quot;</span>);</span><br><span class="line">        &#125;</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+
+
+<p>服务停止时等待消费队列聚合事件处理完成，然后关闭消费线程和线程池。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/nodemanager/containermanager/logaggregation/LogAggregationService.java</span></span><br><span class="line">  <span class="meta">@Override</span></span><br><span class="line">  <span class="function"><span class="keyword">protected</span> <span class="keyword">void</span> <span class="title">serviceStop</span><span class="params">()</span> <span class="keyword">throws</span> Exception </span>&#123;</span><br><span class="line">    LOG.info(<span class="keyword">this</span>.getName() + <span class="string">&quot; waiting for pending aggregation during exit&quot;</span>);</span><br><span class="line">    blockNewLogAggr = <span class="keyword">true</span>;</span><br><span class="line">    <span class="keyword">synchronized</span> (waitForProcess) &#123;</span><br><span class="line">      <span class="keyword">while</span> (!processed &amp;&amp; launcherLogAggregatorThread.isAlive()) &#123;</span><br><span class="line">        waitForProcess.wait(<span class="number">1000</span>);</span><br><span class="line">        LOG.info(<span class="string">&quot;Waiting for launcherLogAggregatorThread to process. Thread state is :&quot;</span> + launcherLogAggregatorThread.getState());</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br><span class="line"> </span><br><span class="line">    <span class="keyword">this</span>.stopped = <span class="keyword">true</span>;</span><br><span class="line">    <span class="keyword">if</span> (launcherLogAggregatorThread != <span class="keyword">null</span>) &#123;</span><br><span class="line">      launcherLogAggregatorThread.interrupt();</span><br><span class="line">      <span class="keyword">try</span> &#123;</span><br><span class="line">        launcherLogAggregatorThread.join();</span><br><span class="line">      &#125; <span class="keyword">catch</span> (InterruptedException ie) &#123;</span><br><span class="line">        LOG.warn(launcherLogAggregatorThread.getName() + <span class="string">&quot; interrupted during join &quot;</span>, ie);</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    stopAggregators();</span><br><span class="line">    <span class="keyword">super</span>.serviceStop();</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<h1 id="7-测试分析"><a href="#7-测试分析" class="headerlink" title="7. 测试分析"></a>7. 测试分析</h1><p>测试集群分为 hadoop-up1 集群和 hadoop-up2 集群，采用 viewfs 模式访问 HDFS，作业提交在 hadoop-up1 集群，日志聚合目录 <code>/tmp/logs/</code> 挂载在 hadoop-up2 集群下，即 <code>hdfs://hadoop-up2/tmp/logs/</code> 目录。</p>
+<h2 id="7-1-NM日志聚合改造前"><a href="#7-1-NM日志聚合改造前" class="headerlink" title="7.1 NM日志聚合改造前"></a>7.1 NM日志聚合改造前</h2><p>作业提交命令：</p>
+<blockquote>
+<p>hadoop jar /opt/cloudera/parcels/CDH-5.14.4-1.cdh5.14.4.p0.3/jars/hadoop-mapreduce-examples-2.6.0-cdh5.14.4.jar pi -Dmapred.job.queue.name=root.exquery 50 50</p>
+</blockquote>
+<h3 id="7-1-1-开启-up2-集群-HDFS-服务"><a href="#7-1-1-开启-up2-集群-HDFS-服务" class="headerlink" title="7.1.1 开启 up2 集群 HDFS 服务"></a>7.1.1 开启 up2 集群 HDFS 服务</h3><p><strong>结论：</strong>作业正常提交，日志正常聚合。</p>
+<h3 id="7-1-2-关闭-up2-集群-HDFS-服务"><a href="#7-1-2-关闭-up2-集群-HDFS-服务" class="headerlink" title="7.1.2 关闭 up2 集群 HDFS 服务"></a>7.1.2 关闭 up2 集群 HDFS 服务</h3><p><strong>结论：</strong>作业提交卡住，需等待请求 HDFS 服务超时，作业处于 Accepted 状态卡住，作业的 ApplicationMaster 处于 NEW 状态，该 Container 没有被分配（整个过程卡住大概 3min），直到抛异常触发日志聚合失败（即 ApplicationEventType.APPLICATION_LOG_HANDLING_FAILED）事件，作业的 ApplicationMaster 分配到 Container，作业开始运行，并且日志不聚合。</p>
+<p><strong>现象1:</strong></p>
+<p>作业提交卡住，YARN UI 作业的状态为 Accepted 状态，Elapsed 时间大概持续了 3min，说明作业在这段时间一直等待运行，并且用于启动 ApplicationMaster 的 Container 状态为 NEW，没有转换到 Submited 状态，表示 Container 没有运行，YARN 认为该作业还未提交。这也是线上集群在日志聚合集群 rpc 压力大时会影响作业的提交数和 Container 分配性能下降的原因。 </p>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/16/c3e8a179698af5e4bc0dc4ee1392583b-1637066438185-21b10203-de41-405f-8b01-73be38692032-44b5fa.png" alt="img"><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/16/043368e578589389f5922ef9f798fa7f-1637066438442-12a965c0-2692-452e-8052-c62c424f9c7b-d31c59.png" alt="img"><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/16/63c946d6373eeccbe88257d366bc7f41-1637067044797-16b73c6a-6576-4308-adf3-e7c334c46f5a-9caa8a.png" alt="img"></p>
+<p><strong>现象2:</strong></p>
+<p>由于 hadoop-up2 集群 HDFS 服务关闭，分析 NodeManager 执行日志，先打印 <code>Application failed to init aggregation</code> 信息，然后打印 <code>LogAggregationService.verifyAndCreateRemoteLogDir() </code>方法执行 HDFS 读请求的调用异常，读请求多次重试后抛出 YarnRuntimeException 异常，堆栈信息的调用栈和执行代码都和这一现象吻合。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line">// NodeManager 日志：</span><br><span class="line">2021-03-10 09:56:43,444 WARN org.apache.hadoop.yarn.server.nodemanager.containermanager.logaggregation.LogAggregationService: Application failed to init aggregation</span><br><span class="line">org.apache.hadoop.yarn.exceptions.YarnRuntimeException: Failed to check permissions for dir [/tmp/logs]</span><br><span class="line">        at org.apache.hadoop.yarn.server.nodemanager.containermanager.logaggregation.LogAggregationService.verifyAndCreateRemoteLogDir(LogAggregationService.java:205)</span><br><span class="line">        at org.apache.hadoop.yarn.server.nodemanager.containermanager.logaggregation.LogAggregationService.initApp(LogAggregationService.java:336)</span><br><span class="line">        at org.apache.hadoop.yarn.server.nodemanager.containermanager.logaggregation.LogAggregationService.handle(LogAggregationService.java:463)</span><br><span class="line">        at org.apache.hadoop.yarn.server.nodemanager.containermanager.logaggregation.LogAggregationService.handle(LogAggregationService.java:68)</span><br><span class="line">        at org.apache.hadoop.yarn.event.AsyncDispatcher.dispatch(AsyncDispatcher.java:182)</span><br><span class="line">        at org.apache.hadoop.yarn.event.AsyncDispatcher$1.run(AsyncDispatcher.java:109)</span><br><span class="line">        at java.lang.Thread.run(Thread.java:748)</span><br><span class="line">Caused by: java.net.ConnectException: Call From 10-197-1-236/10.197.1.236 to 10-197-1-238:8020 failed on connection exception: java.net.ConnectException: Connection refused; For more details see:  http://wiki.apache.org/hadoop/ConnectionRefused</span><br><span class="line">        // 省略</span><br><span class="line">        at org.apache.hadoop.hdfs.DistributedFileSystem.getFileStatus(DistributedFileSystem.java:1261)</span><br><span class="line">        at org.apache.hadoop.fs.FilterFileSystem.getFileStatus(FilterFileSystem.java:432)</span><br><span class="line">        at org.apache.hadoop.fs.viewfs.ChRootedFileSystem.getFileStatus(ChRootedFileSystem.java:226)</span><br><span class="line">        at org.apache.hadoop.fs.viewfs.ViewFileSystem.getFileStatus(ViewFileSystem.java:379)</span><br><span class="line">        at org.apache.hadoop.yarn.server.nodemanager.containermanager.logaggregation.LogAggregationService.verifyAndCreateRemoteLogDir(LogAggregationService.java:194)</span><br><span class="line">2021-03-10 09:56:43,445 WARN org.apache.hadoop.yarn.server.nodemanager.containermanager.application.Application: Log Aggregation service failed to initialize, there will be no logs for this application</span><br></pre></td></tr></table></figure>
+
+<h2 id="7-2-NM日志聚合改造后"><a href="#7-2-NM日志聚合改造后" class="headerlink" title="7.2 NM日志聚合改造后"></a>7.2 NM日志聚合改造后</h2><p>作业提交命令：</p>
+<blockquote>
+<p>hadoop jar /opt/cloudera/parcels/CDH-5.14.4-1.cdh5.14.4.p0.3/jars/hadoop-mapreduce-examples-2.6.0-cdh5.14.4.jar pi -Dmapred.job.queue.name=root.exquery 50 50</p>
+</blockquote>
+<h3 id="（1）开启-hadoop-up2-集群-HDFS-服务"><a href="#（1）开启-hadoop-up2-集群-HDFS-服务" class="headerlink" title="（1）开启 hadoop-up2 集群 HDFS 服务"></a>（1）开启 hadoop-up2 集群 HDFS 服务</h3><p><strong>结论：</strong>作业正常提交，日志正常聚合。</p>
+<h3 id="（2）关闭-hadoop-up2-集群-HDFS-服务"><a href="#（2）关闭-hadoop-up2-集群-HDFS-服务" class="headerlink" title="（2）关闭 hadoop-up2 集群 HDFS 服务"></a>（2）关闭 hadoop-up2 集群 HDFS 服务</h3><p><strong>结论：</strong> 作业正常提交，日志聚合失败，不影响作业提交和运行。</p>
+<p><strong>现象：</strong></p>
+<ul>
+<li><p>作业正常执行提交和执行。</p>
+</li>
+<li><p>日志聚合读请求 HDFS 异常（和 7.1 中 NM 日志一致），但不影响作业执行。</p>
+</li>
+<li><p>日志聚合失败，HistoryServer 无法查看聚合的日志。 </p>
+</li>
+</ul>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/16/f030a2d6f3aff5590254ba0500e9f117-1637067077718-7e978d06-1909-423f-b610-45e3bc94e209-4fa55a.png" alt="img"></p>
+<p>至此，我们已经实现了 YARN 聚合日志的异步初始化和上传，避免了聚合日志集群 HDFS 服务异常对 YARN 集群任务执行的影响。</p>
+<h1 id="参考资料"><a href="#参考资料" class="headerlink" title="参考资料"></a>参考资料</h1><ol>
+<li><a target="_blank" rel="noopener" href="https://blog.csdn.net/Androidlushangderen/article/details/90115624">YARN的Log Aggregation原理</a></li>
+</ol>
+
+    </div>
+
+    
+    
+    
+
+    <div>
+      
+      <div>
+	 
+		<div style="text-align:center;color:#bfbfbf;font-size:16px;"> 
+			<span>-------- 本文结束 </span> <i class="fa fa-paw"></i> <span> 感谢阅读 --------</span>
+		</div> 
+	
+</div>
+      
+    </div>
+        <div class="reward-container">
+  <div></div>
+  <button onclick="var qr = document.getElementById('qr'); qr.style.display = (qr.style.display === 'none') ? 'block' : 'none';">
+    请我喝杯咖啡~
+  </button>
+  <div id="qr" style="display: none;">
+      
+      <div style="display: inline-block;">
+        <img src="/images/wechatpay.png" alt="笨小康 微信打赏">
+        <p>微信打赏</p>
+      </div>
+      
+      <div style="display: inline-block;">
+        <img src="/images/alipay.png" alt="笨小康 支付宝打赏">
+        <p>支付宝打赏</p>
+      </div>
+
+  </div>
+</div>
+
+
+      <footer class="post-footer">
+          <div class="post-tags">
+              <a href="/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/" rel="tag"><i class="fa fa-tag"></i> 大数据</a>
+              <a href="/tags/YARN/" rel="tag"><i class="fa fa-tag"></i> YARN</a>
+          </div>
+
+        
+
+
+        
+    <div class="post-nav">
+      <div class="post-nav-item">
+    <a href="/2021/11/10/%E5%A7%8B%E4%BA%8E%E6%97%A5%E8%AE%B0%EF%BC%8C%E5%BF%A0%E4%BA%8E%E5%86%99%E4%BD%9C/" rel="prev" title="始于日记，忠于写作">
+      <i class="fa fa-chevron-left"></i> 始于日记，忠于写作
+    </a></div>
+      <div class="post-nav-item">
+    <a href="/2021/11/16/YARN-RM%E4%B8%8EZK%E4%BA%A4%E4%BA%92%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90%E5%8F%8A%E4%BC%98%E5%8C%96/" rel="next" title="YARN RM与ZK交互源码分析及优化">
+      YARN RM与ZK交互源码分析及优化 <i class="fa fa-chevron-right"></i>
+    </a></div>
+    </div>
+      </footer>
+    
+  </article>
+  
+  
+  
+
+
+
+
+          </div>
+          
+
+<script>
+  window.addEventListener('tabs:register', () => {
+    let { activeClass } = CONFIG.comments;
+    if (CONFIG.comments.storage) {
+      activeClass = localStorage.getItem('comments_active') || activeClass;
+    }
+    if (activeClass) {
+      let activeTab = document.querySelector(`a[href="#comment-${activeClass}"]`);
+      if (activeTab) {
+        activeTab.click();
+      }
+    }
+  });
+  if (CONFIG.comments.storage) {
+    window.addEventListener('tabs:click', event => {
+      if (!event.target.matches('.tabs-comment .tab-content .tab-pane')) return;
+      let commentClass = event.target.classList[1];
+      localStorage.setItem('comments_active', commentClass);
+    });
+  }
+</script>
+
+        </div>
+          
+  
+  <div class="toggle sidebar-toggle">
+    <span class="toggle-line toggle-line-first"></span>
+    <span class="toggle-line toggle-line-middle"></span>
+    <span class="toggle-line toggle-line-last"></span>
+  </div>
+
+  <aside class="sidebar">
+    <div class="sidebar-inner">
+
+      <ul class="sidebar-nav motion-element">
+        <li class="sidebar-nav-toc">
+          文章目录
+        </li>
+        <li class="sidebar-nav-overview">
+          站点概览
+        </li>
+      </ul>
+
+      <!--noindex-->
+      <div class="post-toc-wrap sidebar-panel">
+          <div class="post-toc motion-element"><ol class="nav"><li class="nav-item nav-level-1"><a class="nav-link" href="#1-%E8%81%9A%E5%90%88%E6%97%A5%E5%BF%97%E4%BB%8B%E7%BB%8D"><span class="nav-text">1. 聚合日志介绍</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#2-%E8%81%9A%E5%90%88%E6%97%A5%E5%BF%97%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F"><span class="nav-text">2. 聚合日志生命周期</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#3-%E8%81%9A%E5%90%88%E6%97%A5%E5%BF%97%E5%8F%82%E6%95%B0"><span class="nav-text">3. 聚合日志参数</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#4-%E6%8A%80%E6%9C%AF%E6%96%B9%E6%A1%88%E8%B0%83%E7%A0%94"><span class="nav-text">4. 技术方案调研</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#5-YARN%E6%97%A5%E5%BF%97%E8%81%9A%E5%90%88%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90"><span class="nav-text">5. YARN日志聚合源码分析</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#6-%E4%BC%98%E5%8C%96%E6%96%B9%E6%A1%88"><span class="nav-text">6. 优化方案</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#6-1-%E8%AF%BB-%E5%86%99-HDFS-%E8%AF%B7%E6%B1%82%E5%BC%82%E6%AD%A5"><span class="nav-text">6.1 读&#x2F;写 HDFS 请求异步</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#6-2-%E8%81%9A%E5%90%88%E6%97%A5%E5%BF%97%E7%BA%BF%E7%A8%8B%E7%9A%84%E5%88%9B%E5%BB%BA%E5%92%8C%E5%A4%84%E7%90%86%E8%A7%A3%E8%80%A6"><span class="nav-text">6.2 聚合日志线程的创建和处理解耦</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#7-%E6%B5%8B%E8%AF%95%E5%88%86%E6%9E%90"><span class="nav-text">7. 测试分析</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#7-1-NM%E6%97%A5%E5%BF%97%E8%81%9A%E5%90%88%E6%94%B9%E9%80%A0%E5%89%8D"><span class="nav-text">7.1 NM日志聚合改造前</span></a><ol class="nav-child"><li class="nav-item nav-level-3"><a class="nav-link" href="#7-1-1-%E5%BC%80%E5%90%AF-up2-%E9%9B%86%E7%BE%A4-HDFS-%E6%9C%8D%E5%8A%A1"><span class="nav-text">7.1.1 开启 up2 集群 HDFS 服务</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#7-1-2-%E5%85%B3%E9%97%AD-up2-%E9%9B%86%E7%BE%A4-HDFS-%E6%9C%8D%E5%8A%A1"><span class="nav-text">7.1.2 关闭 up2 集群 HDFS 服务</span></a></li></ol></li><li class="nav-item nav-level-2"><a class="nav-link" href="#7-2-NM%E6%97%A5%E5%BF%97%E8%81%9A%E5%90%88%E6%94%B9%E9%80%A0%E5%90%8E"><span class="nav-text">7.2 NM日志聚合改造后</span></a><ol class="nav-child"><li class="nav-item nav-level-3"><a class="nav-link" href="#%EF%BC%881%EF%BC%89%E5%BC%80%E5%90%AF-hadoop-up2-%E9%9B%86%E7%BE%A4-HDFS-%E6%9C%8D%E5%8A%A1"><span class="nav-text">（1）开启 hadoop-up2 集群 HDFS 服务</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#%EF%BC%882%EF%BC%89%E5%85%B3%E9%97%AD-hadoop-up2-%E9%9B%86%E7%BE%A4-HDFS-%E6%9C%8D%E5%8A%A1"><span class="nav-text">（2）关闭 hadoop-up2 集群 HDFS 服务</span></a></li></ol></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="nav-text">参考资料</span></a></li></ol></div>
+      </div>
+      <!--/noindex-->
+
+      <div class="site-overview-wrap sidebar-panel">
+        <div class="site-author motion-element" itemprop="author" itemscope itemtype="http://schema.org/Person">
+  <p class="site-author-name" itemprop="name">笨小康</p>
+  <div class="site-description" itemprop="description"></div>
+</div>
+<div class="site-state-wrap motion-element">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+          <a href="/archives/">
+        
+          <span class="site-state-item-count">10</span>
+          <span class="site-state-item-name">日志</span>
+        </a>
+      </div>
+      <div class="site-state-item site-state-categories">
+            <a href="/categories/">
+          
+        <span class="site-state-item-count">3</span>
+        <span class="site-state-item-name">分类</span></a>
+      </div>
+      <div class="site-state-item site-state-tags">
+            <a href="/tags/">
+          
+        <span class="site-state-item-count">4</span>
+        <span class="site-state-item-name">标签</span></a>
+      </div>
+  </nav>
+</div>
+
+
+
+      </div>
+
+    </div>
+  </aside>
+  <div id="sidebar-dimmer"></div>
+
+
+      </div>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        
+
+        
+
+<div class="copyright">
+  
+  &copy; 
+  <span itemprop="copyrightYear">2021</span>
+  <span class="with-love">
+    <i class="fa fa-heart"></i>
+  </span>
+  <span class="author" itemprop="copyrightHolder">笨小康</span>
+</div>
+
+        
+
+
+
+
+
+
+
+
+      </div>
+    </footer>
+  </div>
+
+  
+  <script src="/lib/anime.min.js"></script>
+  <script src="/lib/velocity/velocity.min.js"></script>
+  <script src="/lib/velocity/velocity.ui.min.js"></script>
+
+<script src="/js/utils.js"></script>
+
+<script src="/js/motion.js"></script>
+
+
+<script src="/js/schemes/pisces.js"></script>
+
+
+<script src="/js/next-boot.js"></script>
+
+
+
+
+  
+
+
+
+
+  
+<script src="/js/local-search.js"></script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+  
+
+</body>
+</html>

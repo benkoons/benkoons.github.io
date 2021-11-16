@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=2">
+<meta name="theme-color" content="#222">
+<meta name="generator" content="Hexo 5.4.0">
+  <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon-next.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/images/favicon-32x32-next.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/favicon-16x16-next.png">
+  <link rel="mask-icon" href="/images/logo.svg" color="#222">
+
+<link rel="stylesheet" href="/css/main.css">
+
+<link rel="stylesheet" href="//fonts.googleapis.com/css?family=Lato:300,300italic,400,400italic,700,700italic&display=swap&subset=latin,latin-ext">
+<link rel="stylesheet" href="/lib/font-awesome/css/all.min.css">
+
+<script id="hexo-configurations">
+    var NexT = window.NexT || {};
+    var CONFIG = {"hostname":"yoursite.com","root":"/","scheme":"Pisces","version":"7.8.0","exturl":false,"sidebar":{"position":"left","display":"post","padding":18,"offset":12,"onmobile":false},"copycode":{"enable":true,"show_result":true,"style":"default"},"back2top":{"enable":true,"sidebar":false,"scrollpercent":false},"bookmark":{"enable":false,"color":"#222","save":"auto"},"fancybox":false,"mediumzoom":false,"lazyload":false,"pangu":false,"comments":{"style":"tabs","active":null,"storage":true,"lazyload":false,"nav":null},"algolia":{"hits":{"per_page":10},"labels":{"input_placeholder":"Search for Posts","hits_empty":"We didn't find any results for the search: ${query}","hits_stats":"${hits} results found in ${time} ms"}},"localsearch":{"enable":true,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false},"motion":{"enable":true,"async":false,"transition":{"post_block":"fadeIn","post_header":"slideDownIn","post_body":"slideDownIn","coll_header":"slideLeftIn","sidebar":"slideUpIn"}},"path":"search.xml"};
+  </script>
+
+  <meta name="description" content="线上集群出现过几次 YARN RM 写 ZK ZNode 的数据量超过 ZNode 限制，导致 RM 服务均进入 Standby 状态，用户无法正常提交任务，整个集群 hang 住，后续排查发现主要是异常任务写 ZNode 数据量太大，超过 ZNode 限制，导致集群其他提交作业的状态信息无法正常写入 ZNode，为避免类似问题再次出现，我们对 RM 写 ZNode 逻辑进行了优化，规避异常任务对">
+<meta property="og:type" content="article">
+<meta property="og:title" content="YARN RM与ZK交互源码分析及优化">
+<meta property="og:url" content="http://yoursite.com/2021/11/16/YARN-RM%E4%B8%8EZK%E4%BA%A4%E4%BA%92%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90%E5%8F%8A%E4%BC%98%E5%8C%96/index.html">
+<meta property="og:site_name" content="笨小康的博客">
+<meta property="og:description" content="线上集群出现过几次 YARN RM 写 ZK ZNode 的数据量超过 ZNode 限制，导致 RM 服务均进入 Standby 状态，用户无法正常提交任务，整个集群 hang 住，后续排查发现主要是异常任务写 ZNode 数据量太大，超过 ZNode 限制，导致集群其他提交作业的状态信息无法正常写入 ZNode，为避免类似问题再次出现，我们对 RM 写 ZNode 逻辑进行了优化，规避异常任务对">
+<meta property="og:locale" content="zh_CN">
+<meta property="article:published_time" content="2021-11-16T15:50:57.000Z">
+<meta property="article:modified_time" content="2021-11-16T15:56:07.863Z">
+<meta property="article:author" content="笨小康">
+<meta property="article:tag" content="大数据">
+<meta property="article:tag" content="YARN">
+<meta name="twitter:card" content="summary">
+
+<link rel="canonical" href="http://yoursite.com/2021/11/16/YARN-RM%E4%B8%8EZK%E4%BA%A4%E4%BA%92%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90%E5%8F%8A%E4%BC%98%E5%8C%96/">
+
+
+<script id="page-configurations">
+  // https://hexo.io/docs/variables.html
+  CONFIG.page = {
+    sidebar: "",
+    isHome : false,
+    isPost : true,
+    lang   : 'zh-CN'
+  };
+</script>
+
+  <title>YARN RM与ZK交互源码分析及优化 | 笨小康的博客</title>
+  
+
+
+
+
+
+
+  <noscript>
+  <style>
+  .use-motion .brand,
+  .use-motion .menu-item,
+  .sidebar-inner,
+  .use-motion .post-block,
+  .use-motion .pagination,
+  .use-motion .comments,
+  .use-motion .post-header,
+  .use-motion .post-body,
+  .use-motion .collection-header { opacity: initial; }
+
+  .use-motion .site-title,
+  .use-motion .site-subtitle {
+    opacity: initial;
+    top: initial;
+  }
+
+  .use-motion .logo-line-before i { left: initial; }
+  .use-motion .logo-line-after i { right: initial; }
+  </style>
+</noscript>
+
+</head>
+
+<body itemscope itemtype="http://schema.org/WebPage">
+  <div class="container use-motion">
+    <div class="headband"></div>
+
+    <header class="header" itemscope itemtype="http://schema.org/WPHeader">
+      <div class="header-inner"><div class="site-brand-container">
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="切换导航栏">
+      <span class="toggle-line toggle-line-first"></span>
+      <span class="toggle-line toggle-line-middle"></span>
+      <span class="toggle-line toggle-line-last"></span>
+    </div>
+  </div>
+
+  <div class="site-meta">
+
+    <a href="/" class="brand" rel="start">
+      <span class="logo-line-before"><i></i></span>
+      <h1 class="site-title">笨小康的博客</h1>
+      <span class="logo-line-after"><i></i></span>
+    </a>
+      <p class="site-subtitle" itemprop="description">星辰大海, 如期而至</p>
+  </div>
+
+  <div class="site-nav-right">
+    <div class="toggle popup-trigger">
+        <i class="fa fa-search fa-fw fa-lg"></i>
+    </div>
+  </div>
+</div>
+
+
+
+
+<nav class="site-nav">
+  <ul id="menu" class="main-menu menu">
+        <li class="menu-item menu-item-home">
+
+    <a href="/" rel="section"><i class="fa fa-home fa-fw"></i>首页</a>
+
+  </li>
+        <li class="menu-item menu-item-archives">
+
+    <a href="/archives/" rel="section"><i class="fa fa-archive fa-fw"></i>归档</a>
+
+  </li>
+        <li class="menu-item menu-item-categories">
+
+    <a href="/categories/" rel="section"><i class="fa fa-th fa-fw"></i>分类</a>
+
+  </li>
+        <li class="menu-item menu-item-tags">
+
+    <a href="/tags/" rel="section"><i class="fa fa-tags fa-fw"></i>标签云</a>
+
+  </li>
+        <li class="menu-item menu-item-photography">
+
+    <a href="/categories/photography/" rel="section"><i class="fa fa-camera fa-fw"></i>摄影集</a>
+
+  </li>
+        <li class="menu-item menu-item-flomo">
+
+    <a href="/categories/flomo/" rel="section"><i class="fa fa-lightbulb fa-fw"></i>随想录</a>
+
+  </li>
+        <li class="menu-item menu-item-about">
+
+    <a href="/about/" rel="section"><i class="fa fa-user fa-fw"></i>关于我</a>
+
+  </li>
+      <li class="menu-item menu-item-search">
+        <a role="button" class="popup-trigger"><i class="fa fa-search fa-fw"></i>搜文章
+        </a>
+      </li>
+  </ul>
+</nav>
+
+
+
+  <div class="search-pop-overlay">
+    <div class="popup search-popup">
+        <div class="search-header">
+  <span class="search-icon">
+    <i class="fa fa-search"></i>
+  </span>
+  <div class="search-input-container">
+    <input autocomplete="off" autocapitalize="off"
+           placeholder="搜索..." spellcheck="false"
+           type="search" class="search-input">
+  </div>
+  <span class="popup-btn-close">
+    <i class="fa fa-times-circle"></i>
+  </span>
+</div>
+<div id="search-result">
+  <div id="no-result">
+    <i class="fa fa-spinner fa-pulse fa-5x fa-fw"></i>
+  </div>
+</div>
+
+    </div>
+  </div>
+
+</div>
+    </header>
+
+    
+  <div class="back-to-top">
+    <i class="fa fa-arrow-up"></i>
+    <span>0%</span>
+  </div>
+  <div class="reading-progress-bar"></div>
+
+
+    <main class="main">
+      <div class="main-inner">
+        <div class="content-wrap">
+          
+
+          <div class="content post posts-expand">
+            
+
+    
+  
+  
+  <article itemscope itemtype="http://schema.org/Article" class="post-block" lang="zh-CN">
+    <link itemprop="mainEntityOfPage" href="http://yoursite.com/2021/11/16/YARN-RM%E4%B8%8EZK%E4%BA%A4%E4%BA%92%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90%E5%8F%8A%E4%BC%98%E5%8C%96/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/images/avatar.gif">
+      <meta itemprop="name" content="笨小康">
+      <meta itemprop="description" content="">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="笨小康的博客">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          YARN RM与ZK交互源码分析及优化
+        </h1>
+
+        <div class="post-meta">
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-calendar"></i>
+              </span>
+              <span class="post-meta-item-text">发表于</span>
+
+              <time title="创建时间：2021-11-16 23:50:57" itemprop="dateCreated datePublished" datetime="2021-11-16T23:50:57+08:00">2021-11-16</time>
+            </span>
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-folder"></i>
+              </span>
+              <span class="post-meta-item-text">分类于</span>
+                <span itemprop="about" itemscope itemtype="http://schema.org/Thing">
+                  <a href="/categories/YARN/" itemprop="url" rel="index"><span itemprop="name">YARN</span></a>
+                </span>
+            </span>
+
+          
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody">
+
+      
+        <p>线上集群出现过几次 YARN RM 写 ZK ZNode 的数据量超过 ZNode 限制，导致 RM 服务均进入 Standby 状态，用户无法正常提交任务，整个集群 hang 住，后续排查发现主要是异常任务写 ZNode 数据量太大，超过 ZNode 限制，导致集群其他提交作业的状态信息无法正常写入 ZNode，为避免类似问题再次出现，我们对 RM 写 ZNode 逻辑进行了优化，规避异常任务对整个集群造成的雪崩效应。</p>
+<h1 id="1-问题复现"><a href="#1-问题复现" class="headerlink" title="1. 问题复现"></a>1. 问题复现</h1><p>最直接方式是修改 ZK 的 Jute 最大缓冲区为 512 B，重启 ZK 和 Yarn 服务，此时 ZK 和 RM 服务均出现异常，ZK 异常信息表现为数据 java.io.IOException: Len error 614 客户端写入数据超过 512B 无法正常写入 ZK，RM 表现为 ”code:CONNECTIONLOSS“，无法连接到 ZK，两个 RM 均处于 Standy 状态，此时集群处于不可用状态。</p>
+<p><strong>leader ZK 异常信息：</strong></p>
+<figure class="highlight tex"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">2020-12-07 16:00:11,869 INFO org.apache.zookeeper.server.ZooKeeperServer: Client attempting to renew session 0x1763c3707800002 at /10.197.1.96:32892</span><br><span class="line">2020-12-07 16:00:11,869 INFO org.apache.zookeeper.server.ZooKeeperServer: Established session 0x1763c3707800002 with negotiated timeout 40000 for client /10.197.1.96:32892</span><br><span class="line">2020-12-07 16:00:11,870 WARN org.apache.zookeeper.server.NIOServerCnxn: Exception causing close of session 0x1763c3707800002 due to java.io.IOException: Len error 614</span><br><span class="line">2020-12-07 16:00:11,870 INFO org.apache.zookeeper.server.NIOServerCnxn: Closed socket connection for client /10.197.1.96:32892 which had sessionid 0x1763c3707800002</span><br><span class="line">2020-12-07 16:00:12,216 INFO org.apache.zookeeper.server.NIOServerCnxnFactory: Accepted socket connection from /10.197.1.141:56492</span><br><span class="line">2020-12-07 16:00:12,216 INFO org.apache.zookeeper.server.ZooKeeperServer: Client attempting to establish new session at /10.197.1.141:56492</span><br><span class="line">2020-12-07 16:00:12,218 INFO org.apache.zookeeper.server.ZooKeeperServer: Established session 0x3763c3707830001 with negotiated timeout 40000 for client /10.197.1.141:56492</span><br><span class="line">2020-12-07 16:00:12,219 WARN org.apache.zookeeper.server.NIOServerCnxn: Exception causing close of session 0x3763c3707830001 due to java.io.IOException: Len error 614</span><br><span class="line">2020-12-07 16:00:12,220 INFO org.apache.zookeeper.server.NIOServerCnxn: Closed socket connection for client /10.197.1.141:56492 which had sessionid 0x3763c3707830001</span><br><span class="line">2020-12-07 16:00:14,275 INFO org.apache.zookeeper.server.NIOServerCnxnFactory: Accepted socket connection from /10.197.1.141:56510</span><br><span class="line">2020-12-07 16:00:14,275 INFO org.apache.zookeeper.server.ZooKeeperServer: Client attempting to renew session 0x3763c3707830001 at /10.197.1.141:56510</span><br><span class="line">2020-12-07 16:00:14,276 INFO org.apache.zookeeper.server.ZooKeeperServer: Established session 0x3763c3707830001 with negotiated timeout 40000 for client /10.197.1.141:56510</span><br><span class="line">2020-12-07 16:00:14,276 WARN org.apache.zookeeper.server.NIOServerCnxn: Exception causing close of session 0x3763c3707830001 due to java.io.IOException: Len error 614</span><br><span class="line">2020-12-07 16:00:14,276 INFO org.apache.zookeeper.server.NIOServerCnxn: Closed socket connection for client /10.197.1.141:56510 which had sessionid 0x3763c3707830001</span><br><span class="line">2020-12-07 16:00:16,000 INFO org.apache.zookeeper.server.ZooKeeperServer: Expiring session 0x1763c3707800000, timeout of 5000ms exceeded</span><br></pre></td></tr></table></figure>
+
+<p><strong>YARN RM 日志：</strong></p>
+<figure class="highlight tex"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line">2020-12-07 16:00:10,938 INFO org.apache.hadoop.ha.ActiveStandbyElector: Session connected.</span><br><span class="line">2020-12-07 16:00:10,938 INFO org.apache.hadoop.ha.ActiveStandbyElector: Ignore duplicate monitor lock-node request.</span><br><span class="line">2020-12-07 16:00:11,038 INFO org.apache.hadoop.ha.ActiveStandbyElector: Session disconnected. Entering neutral mode...</span><br><span class="line">2020-12-07 16:00:11,647 INFO org.apache.zookeeper.ClientCnxn: Opening socket connection to server slave-prd-10-197-1-236.v-bj-5.kwang.lan/10.197.1.236:2181. Will not attempt to authenticate using SASL (unknown error)</span><br><span class="line">2020-12-07 16:00:11,647 INFO org.apache.zookeeper.ClientCnxn: Socket connection established, initiating session, client: /10.197.1.141:56854, server: slave-prd-10-197-1-236.v-bj-5.kwang.lan/10.197.1.236:2181</span><br><span class="line">2020-12-07 16:00:11,649 INFO org.apache.zookeeper.ClientCnxn: Session establishment complete on server slave-prd-10-197-1-236.v-bj-5.kwang.lan/10.197.1.236:2181, sessionid = 0x1763c3707800001, negotiated timeout = 40000</span><br><span class="line">2020-12-07 16:00:11,649 INFO org.apache.hadoop.ha.ActiveStandbyElector: Session connected.</span><br><span class="line">2020-12-07 16:00:11,650 INFO org.apache.hadoop.ha.ActiveStandbyElector: Ignore duplicate monitor lock-node request.</span><br><span class="line">2020-12-07 16:00:11,650 INFO org.apache.zookeeper.ClientCnxn: Unable to read additional data from server sessionid 0x1763c3707800001, likely server has closed socket, closing socket connection and attempting reconnect</span><br><span class="line">2020-12-07 16:00:11,750 FATAL org.apache.hadoop.ha.ActiveStandbyElector: Received create error from Zookeeper. code:CONNECTIONLOSS for path /yarn-leader-election/yarnRM/ActiveStandbyElectorLock. Not retrying further znode create connection errors.</span><br><span class="line">2020-12-07 16:00:12,210 INFO org.apache.zookeeper.ZooKeeper: Session: 0x1763c3707800001 closed</span><br><span class="line">2020-12-07 16:00:12,212 WARN org.apache.hadoop.ha.ActiveStandbyElector: Ignoring stale result from old client with sessionId 0x1763c3707800001</span><br><span class="line">2020-12-07 16:00:12,212 WARN org.apache.hadoop.ha.ActiveStandbyElector: Ignoring stale result from old client with sessionId 0x1763c3707800001</span><br><span class="line">2020-12-07 16:00:12,212 INFO org.apache.zookeeper.ClientCnxn: EventThread shut down</span><br><span class="line">2020-12-07 16:00:12,213 ERROR org.apache.hadoop.yarn.server.resourcemanager.ResourceManager: Received RMFatalEvent of type EMBEDDED<span class="built_in">_</span>ELECTOR<span class="built_in">_</span>FAILED, caused by Received create error from Zookeeper. code:CONNECTIONLOSS for path /yarn-leader-election/yarnRM/ActiveStandbyElectorLock. Not retrying further znode create connection errors.</span><br><span class="line">2020-12-07 16:00:12,213 WARN org.apache.hadoop.yarn.server.resourcemanager.ResourceManager: Transitioning the resource manager to standby.</span><br><span class="line">2020-12-07 16:00:12,214 INFO org.apache.hadoop.yarn.server.resourcemanager.ResourceManager: Transitioning RM to Standby mode</span><br><span class="line">2020-12-07 16:00:12,214 INFO org.apache.hadoop.yarn.server.resourcemanager.ResourceManager: Already in standby state</span><br><span class="line">2020-12-07 16:00:12,214 INFO org.apache.hadoop.ha.ActiveStandbyElector: Yielding from electionÏ</span><br><span class="line">2020-12-07 16:00:12,214 INFO org.apache.zookeeper.ZooKeeper: Initiating client connection, connectString=slave-prd-10-197-1-236.v-bj-5.kwang.lan:2181,slave-prd-10-197-1-96.v-bj-5.kwang.lan:2181,slave-prd-10-197-1-141.v-bj-5.kwang.lan:2181 sessionTimeout=60000 watcher=org.apache.hadoop.ha.ActiveStandbyElector<span class="built_in">$</span>WatcherWithClientRef@67b6359c</span><br><span class="line">2020-12-07 16:00:12,215 INFO org.apache.zookeeper.ClientCnxn: Opening socket connection to server slave-prd-10-197-1-141.v-bj-5.kwang.lan/10.197.1.141:2181. Will not attempt to authenticate using SASL (unknown error)</span><br><span class="line">2020-12-07 16:00:12,216 INFO org.apache.zookeeper.ClientCnxn: Socket connection established, initiating session, client: /10.197.1.141:56492, server: slave-prd-10-197-1-141.v-bj-5.kwang.lan/10.197.1.141:2181</span><br><span class="line">2020-12-07 16:00:12,218 INFO org.apache.zookeeper.ClientCnxn: Session establishment complete on server slave-prd-10-197-1-141.v-bj-5.kwang.lan/10.197.1.141:2181, sessionid = 0x3763c3707830001, negotiated timeout = 40000</span><br><span class="line">2020-12-07 16:00:12,219 INFO org.apache.hadoop.ha.ActiveStandbyElector: Session connected.</span><br><span class="line">2020-12-07 16:00:12,220 INFO org.apache.zookeeper.ClientCnxn: Unable to read additional data from server sessionid 0x3763c3707830001, likely server has closed socket, closing socket connection and attempting reconnect</span><br><span class="line">2020-12-07 16:00:12,320 INFO org.apache.hadoop.ha.ActiveStandbyElector: Session disconnected. Entering neutral mode...</span><br><span class="line">2020-12-07 16:00:12,320 WARN org.apache.hadoop.yarn.server.resourcemanager.EmbeddedElectorService: Lost contact with Zookeeper. Transitioning to standby in 60000 ms if connection is not reestablished.</span><br></pre></td></tr></table></figure>
+
+<h1 id="2-RM-与-ZNode-交互原理"><a href="#2-RM-与-ZNode-交互原理" class="headerlink" title="2. RM 与 ZNode 交互原理"></a>2. RM 与 ZNode 交互原理</h1><h2 id="2-1-RM-状态在-ZK-中的存储"><a href="#2-1-RM-状态在-ZK-中的存储" class="headerlink" title="2.1 RM 状态在 ZK 中的存储"></a>2.1 RM 状态在 ZK 中的存储</h2><p>不管 RM 是否启用了高可用，RM 作为 Yarn 的核心服务组件，不仅要与各个节点上的 ApplicationMaster 进行通信，还要与 NodeManager 进行心跳包的传输，自然在 RM 上会注册进来很多应用，每个应用由一个 ApplicationMaster 负责掌管整个应用周期，既然 RM 角色如此重要，就有必要保存一下 RM 的信息状态，以免 RM 进程异常退出后导致应用状态信息全部丢失，RM 重启无法重跑之前的任务。</p>
+<p>既然应用状态信息要保存的目标易经明确了，那保存方式和保存的数据信息是什么呢。</p>
+<p>在 Yarn 中 RM 应用状态信息保存的方式有四种：</p>
+<ul>
+<li><p>MemoryRMStateStore——信息状态保存在内存中的实现类。</p>
+</li>
+<li><p>FileSystemRMStateStore——信息状态保存在 HDFS 文件系统中，这个是做了持久化的。</p>
+</li>
+<li><p>NullRMStateStore——什么都不做，就是不保存应用状态信息。</p>
+</li>
+<li><p>ZKRMStateStore——信息状态保存在 Zookeeper 中。</p>
+</li>
+</ul>
+<p>由于 YARN 启用了 RM HA，以上四种方式只能支持 ZKRMStateStore。</p>
+<p>那 RM 在 ZK 中到底是存储了哪些信息状态呢？如下所示，是 ZK 中存储 RM 信息状态的目录格式，可以看出，ZK 中主要存储 Application（作业的状态信息）和 SECRET_MANAGER（作业的 TOKEN 信息）等。</p>
+<figure class="highlight tex"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line">ROOT<span class="built_in">_</span>DIR<span class="built_in">_</span>PATH</span><br><span class="line">  |--- VERSION<span class="built_in">_</span>INFO</span><br><span class="line">  |--- EPOCH<span class="built_in">_</span>NODE</span><br><span class="line">  |--- RM<span class="built_in">_</span>ZK<span class="built_in">_</span>FENCING<span class="built_in">_</span>LOCK</span><br><span class="line">  |--- RM<span class="built_in">_</span>APP<span class="built_in">_</span>ROOT</span><br><span class="line">  |     |----- (<span class="params">#</span>ApplicationId1)</span><br><span class="line">  |     |        |----- (<span class="params">#</span>ApplicationAttemptIds)</span><br><span class="line">  |     |</span><br><span class="line">  |     |----- (<span class="params">#</span>ApplicationId2)</span><br><span class="line">  |     |       |----- (<span class="params">#</span>ApplicationAttemptIds)</span><br><span class="line">  |     ....</span><br><span class="line">  |</span><br><span class="line">  |--- RM<span class="built_in">_</span>DT<span class="built_in">_</span>SECRET<span class="built_in">_</span>MANAGER<span class="built_in">_</span>ROOT</span><br><span class="line">  |----- RM<span class="built_in">_</span>DT<span class="built_in">_</span>SEQUENTIAL<span class="built_in">_</span>NUMBER<span class="built_in">_</span>ZNODE<span class="built_in">_</span>NAME</span><br><span class="line">  |----- RM<span class="built_in">_</span>DELEGATION<span class="built_in">_</span>TOKENS<span class="built_in">_</span>ROOT<span class="built_in">_</span>ZNODE<span class="built_in">_</span>NAME</span><br><span class="line">  |       |----- Token<span class="built_in">_</span>1</span><br><span class="line">  |       |----- Token<span class="built_in">_</span>2</span><br><span class="line">  |       ....</span><br><span class="line">  |</span><br><span class="line">  |----- RM<span class="built_in">_</span>DT<span class="built_in">_</span>MASTER<span class="built_in">_</span>KEYS<span class="built_in">_</span>ROOT<span class="built_in">_</span>ZNODE<span class="built_in">_</span>NAME</span><br><span class="line">  |      |----- Key<span class="built_in">_</span>1</span><br><span class="line">  |      |----- Key<span class="built_in">_</span>2</span><br><span class="line">  ....</span><br><span class="line">  |--- AMRMTOKEN<span class="built_in">_</span>SECRET<span class="built_in">_</span>MANAGER<span class="built_in">_</span>ROOT</span><br><span class="line">  |----- currentMasterKey</span><br><span class="line">  |----- nextMasterKey</span><br></pre></td></tr></table></figure>
+
+<h2 id="2-2-ZK-存储-amp-更新-RM-信息状态逻辑"><a href="#2-2-ZK-存储-amp-更新-RM-信息状态逻辑" class="headerlink" title="2.2 ZK 存储&amp;更新 RM 信息状态逻辑"></a>2.2 ZK 存储&amp;更新 RM 信息状态逻辑</h2><p>作业提交到 YARN 上的入口，都是通过 YarnClient 这个接口 api 提交的，具体提交方法为 submitApplication()。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/client/api/YarnClient.java</span></span><br><span class="line">  <span class="function"><span class="keyword">public</span> <span class="keyword">abstract</span> ApplicationId <span class="title">submitApplication</span><span class="params">(</span></span></span><br><span class="line"><span class="params"><span class="function">      ApplicationSubmissionContext appContext)</span> <span class="keyword">throws</span> YarnException,</span></span><br><span class="line"><span class="function">      IOException</span>;</span><br></pre></td></tr></table></figure>
+
+
+
+<p>作业提交后，会经过一些列的事件转换，请求到不同的状态机进行处理，而保存作业的状态机 StoreAppTransition 会对 APP 的状态进行保存，将其元数据存储到 ZK 中。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/resourcemanager/recovery/RMStateStore.java</span></span><br><span class="line">  <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">storeNewApplication</span><span class="params">(RMApp app)</span> </span>&#123;</span><br><span class="line">    ApplicationSubmissionContext context = app</span><br><span class="line">                                            .getApplicationSubmissionContext();</span><br><span class="line">    <span class="keyword">assert</span> context <span class="keyword">instanceof</span> ApplicationSubmissionContextPBImpl;</span><br><span class="line">    ApplicationStateData appState =</span><br><span class="line">        ApplicationStateData.newInstance(</span><br><span class="line">            app.getSubmitTime(), app.getStartTime(), context, app.getUser());</span><br><span class="line">    <span class="comment">// 向调度器发送 RMStateStoreEventType.STORE_APP 事件</span></span><br><span class="line">    dispatcher.getEventHandler().handle(<span class="keyword">new</span> RMStateStoreAppEvent(appState));</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+
+
+<p>这里向调度器发送 RMStateStoreEventType.STORE_APP 事件，并注册了 StoreAppTransition 状态机。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/resourcemanager/recovery/RMStateStore.java</span></span><br><span class="line">    .addTransition(RMStateStoreState.ACTIVE,</span><br><span class="line">          EnumSet.of(RMStateStoreState.ACTIVE, RMStateStoreState.FENCED),</span><br><span class="line">          RMStateStoreEventType.STORE_APP, <span class="keyword">new</span> StoreAppTransition())</span><br></pre></td></tr></table></figure>
+
+
+
+<p>StoreAppTransition 状态机最终会调用 ZKRMStateStore#storeApplicationStateInternal() 方法，对 RM 的元数据在 ZK 中进行保存。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/resourcemanager/recovery/ZKRMStateStore.java </span></span><br><span class="line">  <span class="meta">@Override</span></span><br><span class="line">  <span class="function"><span class="keyword">public</span> <span class="keyword">synchronized</span> <span class="keyword">void</span> <span class="title">storeApplicationStateInternal</span><span class="params">(ApplicationId appId,</span></span></span><br><span class="line"><span class="params"><span class="function">      ApplicationStateData appStateDataPB)</span> <span class="keyword">throws</span> Exception </span>&#123;</span><br><span class="line">    String nodeCreatePath = getNodePath(rmAppRoot, appId.toString());</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (LOG.isDebugEnabled()) &#123;</span><br><span class="line">      LOG.debug(<span class="string">&quot;Storing info for app: &quot;</span> + appId + <span class="string">&quot; at: &quot;</span> + nodeCreatePath);</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">byte</span>[] appStateData = appStateDataPB.getProto().toByteArray();</span><br><span class="line">	createWithRetries(nodeCreatePath, appStateData, zkAcl,</span><br><span class="line">              CreateMode.PERSISTENT);</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+
+
+<p>RM Application 的状态保存到 ZK 后，APP 状态最终会转化为 ACCETPED 状态 ，此时，会触发 StartAppAttemptTransition 状态机，对 AppAttemp 状态进行保存。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/resourcemanager/recovery/ZKRMStateStore.java </span></span><br><span class="line">  <span class="meta">@Override</span></span><br><span class="line">  <span class="function"><span class="keyword">public</span> <span class="keyword">synchronized</span> <span class="keyword">void</span> <span class="title">storeApplicationAttemptStateInternal</span><span class="params">(</span></span></span><br><span class="line"><span class="params"><span class="function">      ApplicationAttemptId appAttemptId,</span></span></span><br><span class="line"><span class="params"><span class="function">      ApplicationAttemptStateData attemptStateDataPB)</span></span></span><br><span class="line"><span class="function">      <span class="keyword">throws</span> Exception </span>&#123;</span><br><span class="line">    String appDirPath = getNodePath(rmAppRoot,</span><br><span class="line">        appAttemptId.getApplicationId().toString());</span><br><span class="line">    String nodeCreatePath = getNodePath(appDirPath, appAttemptId.toString());</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (LOG.isDebugEnabled()) &#123;</span><br><span class="line">      LOG.debug(<span class="string">&quot;Storing info for attempt: &quot;</span> + appAttemptId + <span class="string">&quot; at: &quot;</span></span><br><span class="line">          + nodeCreatePath);</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">byte</span>[] attemptStateData = attemptStateDataPB.getProto().toByteArray();</span><br><span class="line">	createWithRetries(nodeCreatePath, attemptStateData, zkAcl,</span><br><span class="line">					CreateMode.PERSISTENT);</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+
+
+<p>而在任务运行结束时，会对 Application 和 AppAttemp 的状态进行更新。而更新操作也是容易出现异常的地方，这两段代码主要是执行更新或添加任务重试状态信息到 ZK 中的操作，YARN 在调度任务的过程中，可能会对任务进行多次重试，主要受网络、硬件、资源等因素影响，如果任务重试信息保存在 ZK 失败，会调用 ZKRMStateStore.ZKAction 类的 runWithRetries() 方法重试。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/resourcemanager/recovery/ZKRMStateStore.java </span></span><br><span class="line">  <span class="comment">// 对 Application 状态进行更新</span></span><br><span class="line">  <span class="meta">@Override</span></span><br><span class="line">  <span class="function"><span class="keyword">public</span> <span class="keyword">synchronized</span> <span class="keyword">void</span> <span class="title">updateApplicationStateInternal</span><span class="params">(ApplicationId appId,</span></span></span><br><span class="line"><span class="params"><span class="function">      ApplicationStateData appStateDataPB)</span> <span class="keyword">throws</span> Exception </span>&#123;</span><br><span class="line">    String nodeUpdatePath = getNodePath(rmAppRoot, appId.toString());</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (LOG.isDebugEnabled()) &#123;</span><br><span class="line">      LOG.debug(<span class="string">&quot;Storing final state info for app: &quot;</span> + appId + <span class="string">&quot; at: &quot;</span></span><br><span class="line">          + nodeUpdatePath);</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">byte</span>[] appStateData = appStateDataPB.getProto().toByteArray();</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (existsWithRetries(nodeUpdatePath, <span class="keyword">false</span>) != <span class="keyword">null</span>) &#123;</span><br><span class="line">      setDataWithRetries(nodeUpdatePath, appStateData, -<span class="number">1</span>);</span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">      <span class="comment">// retry 是会调用到 ZKRMStateStore.ZKAction#runWithRetries() 方法</span></span><br><span class="line">      createWithRetries(nodeUpdatePath, appStateData, zkAcl,</span><br><span class="line">              CreateMode.PERSISTENT);</span><br><span class="line">      LOG.debug(appId + <span class="string">&quot; znode didn&#x27;t exist. Created a new znode to&quot;</span></span><br><span class="line">              + <span class="string">&quot; update the application state.&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="comment">// 对 AppAttemp 状态进行更新</span></span><br><span class="line">  <span class="meta">@Override</span></span><br><span class="line">  <span class="function"><span class="keyword">public</span> <span class="keyword">synchronized</span> <span class="keyword">void</span> <span class="title">updateApplicationAttemptStateInternal</span><span class="params">(</span></span></span><br><span class="line"><span class="params"><span class="function">      ApplicationAttemptId appAttemptId,</span></span></span><br><span class="line"><span class="params"><span class="function">      ApplicationAttemptStateData attemptStateDataPB)</span></span></span><br><span class="line"><span class="function">      <span class="keyword">throws</span> Exception </span>&#123;</span><br><span class="line">    String appIdStr = appAttemptId.getApplicationId().toString();</span><br><span class="line">    String appAttemptIdStr = appAttemptId.toString();</span><br><span class="line">    String appDirPath = getNodePath(rmAppRoot, appIdStr);</span><br><span class="line">    String nodeUpdatePath = getNodePath(appDirPath, appAttemptIdStr);</span><br><span class="line">    <span class="keyword">if</span> (LOG.isDebugEnabled()) &#123;</span><br><span class="line">      LOG.debug(<span class="string">&quot;Storing final state info for attempt: &quot;</span> + appAttemptIdStr</span><br><span class="line">          + <span class="string">&quot; at: &quot;</span> + nodeUpdatePath);</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">byte</span>[] attemptStateData = attemptStateDataPB.getProto().toByteArray();</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (existsWithRetries(nodeUpdatePath, <span class="keyword">false</span>) != <span class="keyword">null</span>) &#123;</span><br><span class="line">      setDataWithRetries(nodeUpdatePath, attemptStateData, -<span class="number">1</span>);</span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">      createWithRetries(nodeUpdatePath, attemptStateData, zkAcl,</span><br><span class="line">              CreateMode.PERSISTENT);</span><br><span class="line">      LOG.debug(appAttemptId + <span class="string">&quot; znode didn&#x27;t exist. Created a new znode to&quot;</span></span><br><span class="line">              + <span class="string">&quot; update the application attempt state.&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+
+
+<p>在启用 YARN 高可用情况下，重试间隔机制如下：受 yarn.resourcemanager.zk-timeout-ms（ZK会话超时时间，线上 1 分钟，即 60000ms）和 yarn.resourcemanager.zk-num-retries（操作失败后重试次数，线上环境 1000次）参数控制，计算公式为：</p>
+<figure class="highlight tex"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">重试时间间隔（yarn.resourcemanager.zk-retry-interval-ms ）=yarn.resourcemanager.zk-timeout-ms(ZK session超时时间)/yarn.resourcemanager.zk-num-retries（重试次数）</span><br></pre></td></tr></table></figure>
+
+<p>即在生产环境中，重试时间间隔 = 600000ms /1000次 = 60 ms/次，即线上环境在任务不成功的条件下，会重试 1000 次，每次 60 ms，这里也可能会导致 RM 堆内存溢出。参考资料：<a target="_blank" rel="noopener" href="https://my.oschina.net/dabird/blog/3089265%E3%80%82">https://my.oschina.net/dabird/blog/3089265。</a></p>
+<p>重试间隔确定代码如下，在 ZKRMStateStore 类 serviceInit() 初始化中被设置。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：src/main/java/org/apache/hadoop/yarn/server/resourcemanager/recovery/ZKRMStateStore.java  </span></span><br><span class="line">  <span class="meta">@Override</span></span><br><span class="line">  <span class="function"><span class="keyword">public</span> <span class="keyword">synchronized</span> <span class="keyword">void</span> <span class="title">initInternal</span><span class="params">(Configuration conf)</span> <span class="keyword">throws</span> Exception </span>&#123;</span><br><span class="line">    zkHostPort = conf.get(YarnConfiguration.RM_ZK_ADDRESS);</span><br><span class="line">    <span class="keyword">if</span> (zkHostPort == <span class="keyword">null</span>) &#123;</span><br><span class="line">      <span class="keyword">throw</span> <span class="keyword">new</span> YarnRuntimeException(<span class="string">&quot;No server address specified for &quot;</span> +</span><br><span class="line">          <span class="string">&quot;zookeeper state store for Resource Manager recovery. &quot;</span> +</span><br><span class="line">          YarnConfiguration.RM_ZK_ADDRESS + <span class="string">&quot; is not configured.&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="comment">// ZK 连接重试次数</span></span><br><span class="line">    numRetries =</span><br><span class="line">        conf.getInt(YarnConfiguration.RM_ZK_NUM_RETRIES,</span><br><span class="line">            YarnConfiguration.DEFAULT_ZK_RM_NUM_RETRIES);</span><br><span class="line">    znodeWorkingPath =</span><br><span class="line">        conf.get(YarnConfiguration.ZK_RM_STATE_STORE_PARENT_PATH,</span><br><span class="line">            YarnConfiguration.DEFAULT_ZK_RM_STATE_STORE_PARENT_PATH);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// ZK session 超时时间</span></span><br><span class="line">    zkSessionTimeout =</span><br><span class="line">        conf.getInt(YarnConfiguration.RM_ZK_TIMEOUT_MS,</span><br><span class="line">            YarnConfiguration.DEFAULT_RM_ZK_TIMEOUT_MS);</span><br><span class="line">    zknodeLimit =</span><br><span class="line">        conf.getInt(YarnConfiguration.RM_ZK_ZNODE_SIZE_LIMIT_BYTES,</span><br><span class="line">            YarnConfiguration.DEFAULT_RM_ZK_ZNODE_SIZE_LIMIT_BYTES);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (HAUtil.isHAEnabled(conf)) &#123;</span><br><span class="line">      zkRetryInterval = zkSessionTimeout / numRetries;</span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">      zkRetryInterval =</span><br><span class="line">          conf.getLong(YarnConfiguration.RM_ZK_RETRY_INTERVAL_MS,</span><br><span class="line">              YarnConfiguration.DEFAULT_RM_ZK_RETRY_INTERVAL_MS);</span><br><span class="line">    &#125;</span><br><span class="line"> &#125;</span><br></pre></td></tr></table></figure>
+
+<p>至此，我们已经清楚了 RM 中作业的信息状态是如何保存在 ZK 中并如何进行更新的。</p>
+<h2 id="2-3-ZK-删除-RM-信息状态逻辑"><a href="#2-3-ZK-删除-RM-信息状态逻辑" class="headerlink" title="2.3 ZK 删除 RM 信息状态逻辑"></a>2.3 ZK 删除 RM 信息状态逻辑</h2><p>在了解了 RM 作业信息状态保存在 ZK 的逻辑后，我们便会产生一个疑问，那 RM 状态保存在 ZK 中后，是否会一直驻留在 ZK 中呢？答案是否定的，ZK 也会对作业的状态进行删除，那删除逻辑是这样的呢？</p>
+<p>删除的核心逻辑位于 RMAppManager#checkAppNumCompletedLimit() 方法中调用的 removeApplication() 方法，其逻辑就是判断保存在 ZK StateStore 中或已完成的作业数量超过对应限制，则对 App 状态信息进行删除。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/resourcemanager/RMAppManager.java</span></span><br><span class="line">  <span class="comment">/*</span></span><br><span class="line"><span class="comment">   * check to see if hit the limit for max # completed apps kept</span></span><br><span class="line"><span class="comment">   */</span></span><br><span class="line">  <span class="function"><span class="keyword">protected</span> <span class="keyword">synchronized</span> <span class="keyword">void</span> <span class="title">checkAppNumCompletedLimit</span><span class="params">()</span> </span>&#123;</span><br><span class="line">    <span class="comment">// check apps kept in state store.</span></span><br><span class="line">    <span class="keyword">while</span> (completedAppsInStateStore &gt; <span class="keyword">this</span>.maxCompletedAppsInStateStore) &#123;</span><br><span class="line">      ApplicationId removeId =</span><br><span class="line">          completedApps.get(completedApps.size() - completedAppsInStateStore);</span><br><span class="line">      RMApp removeApp = rmContext.getRMApps().get(removeId);</span><br><span class="line">      LOG.info(<span class="string">&quot;Max number of completed apps kept in state store met:&quot;</span></span><br><span class="line">          + <span class="string">&quot; maxCompletedAppsInStateStore = &quot;</span> + maxCompletedAppsInStateStore</span><br><span class="line">          + <span class="string">&quot;, removing app &quot;</span> + removeApp.getApplicationId()</span><br><span class="line">          + <span class="string">&quot; from state store.&quot;</span>);</span><br><span class="line">      rmContext.getStateStore().removeApplication(removeApp);</span><br><span class="line">      completedAppsInStateStore--;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// check apps kept in memorty.</span></span><br><span class="line">    <span class="keyword">while</span> (completedApps.size() &gt; <span class="keyword">this</span>.maxCompletedAppsInMemory) &#123;</span><br><span class="line">      ApplicationId removeId = completedApps.remove();</span><br><span class="line">      LOG.info(<span class="string">&quot;Application should be expired, max number of completed apps&quot;</span></span><br><span class="line">          + <span class="string">&quot; kept in memory met: maxCompletedAppsInMemory = &quot;</span></span><br><span class="line">          + <span class="keyword">this</span>.maxCompletedAppsInMemory + <span class="string">&quot;, removing app &quot;</span> + removeId</span><br><span class="line">          + <span class="string">&quot; from memory: &quot;</span>);</span><br><span class="line">      rmContext.getRMApps().remove(removeId);</span><br><span class="line">      <span class="keyword">this</span>.applicationACLsManager.removeApplication(removeId);</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+
+
+<p>可以看看相关参数是如何设置的，其中保存在 ZK StateStore 中和保存在 Memory 的 App 最大数量是一致的，默认是 10000（线上环境默认也是 10000），且保存在 ZK StateSotre 中的作业数量不能超过保存在 Memory 中的作业数量。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/resourcemanager/RMAppManager.java</span></span><br><span class="line">  <span class="function"><span class="keyword">public</span> <span class="title">RMAppManager</span><span class="params">(RMContext context,</span></span></span><br><span class="line"><span class="params"><span class="function">      YarnScheduler scheduler, ApplicationMasterService masterService,</span></span></span><br><span class="line"><span class="params"><span class="function">      ApplicationACLsManager applicationACLsManager, Configuration conf)</span> </span>&#123;</span><br><span class="line">    ...</span><br><span class="line">    <span class="comment">// 保存在 Memory 中的 App 最大数量</span></span><br><span class="line">    <span class="keyword">this</span>.maxCompletedAppsInMemory = conf.getInt(</span><br><span class="line">        YarnConfiguration.RM_MAX_COMPLETED_APPLICATIONS,</span><br><span class="line">        YarnConfiguration.DEFAULT_RM_MAX_COMPLETED_APPLICATIONS);</span><br><span class="line">    <span class="comment">// 保存在 ZK StateStore 中的 App 最大数量，默认和 Memory 中的最大值保存一致</span></span><br><span class="line">    <span class="keyword">this</span>.maxCompletedAppsInStateStore =</span><br><span class="line">        conf.getInt(</span><br><span class="line">          YarnConfiguration.RM_STATE_STORE_MAX_COMPLETED_APPLICATIONS,</span><br><span class="line">          YarnConfiguration.DEFAULT_RM_STATE_STORE_MAX_COMPLETED_APPLICATIONS);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 保存在 ZK StateStore 中的 App 数量不能超过保存在 Memory 中的 App 数量</span></span><br><span class="line">    <span class="keyword">if</span> (<span class="keyword">this</span>.maxCompletedAppsInStateStore &gt; <span class="keyword">this</span>.maxCompletedAppsInMemory) &#123;</span><br><span class="line">      <span class="keyword">this</span>.maxCompletedAppsInStateStore = <span class="keyword">this</span>.maxCompletedAppsInMemory;</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/conf/YarnConfiguration.java</span></span><br><span class="line">  <span class="comment">// maxCompletedAppsInMemory 参数定义</span></span><br><span class="line">  <span class="comment">/** The maximum number of completed applications RM keeps. */</span> </span><br><span class="line">  <span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">final</span> String RM_MAX_COMPLETED_APPLICATIONS =</span><br><span class="line">    RM_PREFIX + <span class="string">&quot;max-completed-applications&quot;</span>;</span><br><span class="line">  <span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="keyword">int</span> DEFAULT_RM_MAX_COMPLETED_APPLICATIONS = <span class="number">10000</span>;</span><br><span class="line"></span><br><span class="line">  <span class="comment">// maxCompletedAppsInStateStore 参数定义，默认和 maxCompletedAppsInMemory 保持一致</span></span><br><span class="line">  <span class="comment">/**</span></span><br><span class="line"><span class="comment">   * The maximum number of completed applications RM state store keeps, by</span></span><br><span class="line"><span class="comment">   * default equals to DEFAULT_RM_MAX_COMPLETED_APPLICATIONS</span></span><br><span class="line"><span class="comment">   */</span></span><br><span class="line">  <span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">final</span> String RM_STATE_STORE_MAX_COMPLETED_APPLICATIONS =</span><br><span class="line">      RM_PREFIX + <span class="string">&quot;state-store.max-completed-applications&quot;</span>;</span><br><span class="line">  <span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="keyword">int</span> DEFAULT_RM_STATE_STORE_MAX_COMPLETED_APPLICATIONS =</span><br><span class="line">      DEFAULT_RM_MAX_COMPLETED_APPLICATIONS;</span><br></pre></td></tr></table></figure>
+
+
+
+<p>执行真正的删除操作，删除在 ZK 中保存的超出限制的 App 状态信息。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/resourcemanager/recovery/ZKRMStateStore.java </span></span><br><span class="line">  <span class="meta">@Override</span></span><br><span class="line">  <span class="function"><span class="keyword">public</span> <span class="keyword">synchronized</span> <span class="keyword">void</span> <span class="title">removeApplicationStateInternal</span><span class="params">(</span></span></span><br><span class="line"><span class="params"><span class="function">      ApplicationStateData  appState)</span></span></span><br><span class="line"><span class="function">      <span class="keyword">throws</span> Exception </span>&#123;</span><br><span class="line">    String appId = appState.getApplicationSubmissionContext().getApplicationId()</span><br><span class="line">        .toString();</span><br><span class="line">    String appIdRemovePath = getNodePath(rmAppRoot, appId);</span><br><span class="line">    ArrayList&lt;Op&gt; opList = <span class="keyword">new</span> ArrayList&lt;Op&gt;();</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 删除在 ZK 中保存的 AppAttempt 信息</span></span><br><span class="line">    <span class="keyword">for</span> (ApplicationAttemptId attemptId : appState.attempts.keySet()) &#123;</span><br><span class="line">      String attemptRemovePath = getNodePath(appIdRemovePath, attemptId.toString());</span><br><span class="line">      opList.add(Op.delete(attemptRemovePath, -<span class="number">1</span>));</span><br><span class="line">    &#125;</span><br><span class="line">    opList.add(Op.delete(appIdRemovePath, -<span class="number">1</span>));</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (LOG.isDebugEnabled()) &#123;</span><br><span class="line">      LOG.debug(<span class="string">&quot;Removing info for app: &quot;</span> + appId + <span class="string">&quot; at: &quot;</span> + appIdRemovePath</span><br><span class="line">          + <span class="string">&quot; and its attempts.&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="comment">// 删除在 ZK 中保存的 Applicaton 信息</span></span><br><span class="line">    doDeleteMultiWithRetries(opList);</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<h1 id="3-技术方案调研及优化"><a href="#3-技术方案调研及优化" class="headerlink" title="3. 技术方案调研及优化"></a>3. 技术方案调研及优化</h1><h2 id="3-1-Hadoop-2-9-0之前修复方法"><a href="#3-1-Hadoop-2-9-0之前修复方法" class="headerlink" title="3.1 Hadoop 2.9.0之前修复方法"></a>3.1 Hadoop 2.9.0之前修复方法</h2><p>RM 状态在 ZK 存储的过程中，RM 作为客户端，ZK 作为服务端，在 Hadoop 2.9.0 版本之前，出现这种异常的处理方式为修改 ZK 端 <code>jute.maxbuffer</code> 参数的值，以增加 RM 作业允许写 ZK 的最大值。但这种处理方式有三种不足：</p>
+<ol>
+<li><p>ZK 服务端允许写入的 ZNode 数据量太大，会影响 ZK 服务的读写性能和 ZK 内存紧张；</p>
+</li>
+<li><p>需要重启 ZK 服务端和客户端 RM 服务，运维成本较高。（如果有其他服务依赖此 ZK 则成本更高，可能还需要重启其他服务）</p>
+</li>
+<li><p>异常任务写 ZNode 数据量不可控，某些情况下还是会发生写入 ZNode 大小超过限制。</p>
+</li>
+</ol>
+<p><strong>Q：为什么要限制 ZK 中 ZNode 大小？</strong></p>
+<p>A：ZK 是一套高吞吐量的系统，为了提高系统的读取速度，ZK不允许从文件中读取需要的数据，而是直接从内存中查找。换句话说，ZK 集群中每一台服务器都包含全量的数据，并且这些数据都会加载到内存中，同时 ZNode 的数据不支持 Append 操作，全部都是 Replace 操作。如果 ZNode 数据量过大，那么读写 ZNode 将造成不确定的延时（比如服务端同步数据慢），同时 ZNode 太大会消耗 ZK 服务器的内存，这也是为什么 ZK 不适合存储大量数据的原因。</p>
+<h2 id="3-2-Hadoop-2-9-0及后续版本修复方法"><a href="#3-2-Hadoop-2-9-0及后续版本修复方法" class="headerlink" title="3.2 Hadoop 2.9.0及后续版本修复方法"></a>3.2 Hadoop 2.9.0及后续版本修复方法</h2><p>在 Hadoop 2.9.0 及后续版本中，yarn-site.xml 中增加了 <code>yarn.resourcemanager.zk-max-znode-size.bytes</code> 参数，该参数定义了 ZK 的 ZNode 节点所能存储的最大数据量，以字节为单位，默认是 1024*1024 字节，也就是 1MB。使用这种方式，我们就不需要修改 ZK 的服务端的配置，而只需修改 Yarn 服务端的配置并重启 RM 服务，就能限制 RM 往 ZK 中写入的数据量，而且也提高了 ZK 服务的可用性。</p>
+<h1 id="4-优化及测试"><a href="#4-优化及测试" class="headerlink" title="4. 优化及测试"></a>4. 优化及测试</h1><h2 id="4-1-优化方案"><a href="#4-1-优化方案" class="headerlink" title="4.1 优化方案"></a>4.1 优化方案</h2><p>优化思路主要是采用 Hadoop 2.9.0 之后的方式，核心主要是在 ZKRMStateStore 类中的 <code>storeApplicationStateInternal()</code>、<code>updateApplicationStateInternal()</code>、<code>storeApplicationAttemptStateInternal()</code>、<code>updateApplicationAttemptStateInternal()</code> 方法逻辑中增加了是否超过写 ZNode 大小限制的判断，避免单个作业写 ZNode 数据量过大导致 RM 和 ZK 服务的不可用。部分代码如下：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/yarn/server/resourcemanager/recovery/ZKRMStateStore.java </span></span><br><span class="line">  <span class="comment">// Application 写 ZNode 时判断大小限制</span></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">  <span class="function"><span class="keyword">public</span> <span class="keyword">synchronized</span> <span class="keyword">void</span> <span class="title">storeApplicationStateInternal</span><span class="params">(ApplicationId appId,</span></span></span><br><span class="line"><span class="params"><span class="function">      ApplicationStateData appStateDataPB)</span> <span class="keyword">throws</span> Exception </span>&#123;</span><br><span class="line">    String nodeCreatePath = getNodePath(rmAppRoot, appId.toString());</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (LOG.isDebugEnabled()) &#123;</span><br><span class="line">      LOG.debug(<span class="string">&quot;Storing info for app: &quot;</span> + appId + <span class="string">&quot; at: &quot;</span> + nodeCreatePath);</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">byte</span>[] appStateData = appStateDataPB.getProto().toByteArray();</span><br><span class="line">    <span class="keyword">if</span> (appStateData.length &lt;= zknodeLimit) &#123;</span><br><span class="line">      createWithRetries(nodeCreatePath, appStateData, zkAcl,</span><br><span class="line">              CreateMode.PERSISTENT);</span><br><span class="line">      LOG.debug(<span class="string">&quot;Store application state data size for &quot;</span> + appId + <span class="string">&quot; is &quot;</span> + appStateData.length);</span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">      LOG.info(<span class="string">&quot;Store application state data size for &quot;</span> + appId + <span class="string">&quot; is &quot;</span> + appStateData.length +</span><br><span class="line">        <span class="string">&quot;. exceeds the maximum allowed size &quot;</span> + zknodeLimit + <span class="string">&quot; for application data.&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="comment">// Application 状态更新时判断写 ZNode 大小</span></span><br><span class="line">  <span class="meta">@Override</span></span><br><span class="line">  <span class="function"><span class="keyword">public</span> <span class="keyword">synchronized</span> <span class="keyword">void</span> <span class="title">updateApplicationStateInternal</span><span class="params">(ApplicationId appId,</span></span></span><br><span class="line"><span class="params"><span class="function">      ApplicationStateData appStateDataPB)</span> <span class="keyword">throws</span> Exception </span>&#123;</span><br><span class="line">    String nodeUpdatePath = getNodePath(rmAppRoot, appId.toString());</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (LOG.isDebugEnabled()) &#123;</span><br><span class="line">      LOG.debug(<span class="string">&quot;Storing final state info for app: &quot;</span> + appId + <span class="string">&quot; at: &quot;</span></span><br><span class="line">          + nodeUpdatePath);</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">byte</span>[] appStateData = appStateDataPB.getProto().toByteArray();</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (appStateData.length &lt;= zknodeLimit) &#123;</span><br><span class="line">      <span class="keyword">if</span> (existsWithRetries(nodeUpdatePath, <span class="keyword">false</span>) != <span class="keyword">null</span>) &#123;</span><br><span class="line">        setDataWithRetries(nodeUpdatePath, appStateData, -<span class="number">1</span>);</span><br><span class="line">      &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        createWithRetries(nodeUpdatePath, appStateData, zkAcl,</span><br><span class="line">                CreateMode.PERSISTENT);</span><br><span class="line">        LOG.debug(appId + <span class="string">&quot; znode didn&#x27;t exist. Created a new znode to&quot;</span></span><br><span class="line">                + <span class="string">&quot; update the application state.&quot;</span>);</span><br><span class="line">      &#125;</span><br><span class="line">      LOG.debug(<span class="string">&quot;Update application state data size for &quot;</span> + appId + <span class="string">&quot; is &quot;</span> + appStateData.length);</span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">      LOG.info(<span class="string">&quot;Update application state data size for &quot;</span> + appId + <span class="string">&quot; is &quot;</span> + appStateData.length +</span><br><span class="line">              <span class="string">&quot;. exceeds the maximum allowed size &quot;</span> + zknodeLimit + <span class="string">&quot; for application data.&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="4-2-验证测试"><a href="#4-2-验证测试" class="headerlink" title="4.2 验证测试"></a>4.2 验证测试</h2><p>设置 Yarn app 允许写 ZNode 的最大值（由于是测试环境，上限限制得比较小），重启 active RM。</p>
+<figure class="highlight tex"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">参数：yarn-site.xml 的 ResourceManager 高级配置代码段（安全阀）</span><br><span class="line">值：</span><br><span class="line">&lt;property&gt;</span><br><span class="line">    &lt;name&gt;yarn.resourcemanager.zk-max-znode-size.bytes&lt;/name&gt;</span><br><span class="line">    &lt;value&gt;512&lt;/value&gt;</span><br><span class="line">&lt;/property&gt;</span><br></pre></td></tr></table></figure>
+
+<p>测试任务：</p>
+<p>hadoop jar /opt/cloudera/parcels/CDH-5.14.4-1.cdh5.14.4.p0.3/jars/hadoop-mapreduce-examples-2.6.0-cdh5.14.4.jar  pi -Dmapred.job.queue.name=root.exquery 20 10</p>
+<p>任务失败时 RM 任务日志如下，可以看出作业状态信息保存在 ZK 的数据超过了 ZNode 限制，此时 ZK 不会保存该作业的状态信息，而 ZK 服务和 RM 服务均是正常对外提供服务的，不影响集群的正常使用。</p>
+<figure class="highlight tex"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="params">#</span> tailf hadoop-cmf-yarn-RESOURCEMANAGER-slave-prd-10-197-1-141.v-bj-5.kwang.log.out  |grep &quot;the maximum allowed size&quot;</span><br><span class="line">2020-12-10 16:53:37,544 INFO org.apache.hadoop.yarn.server.resourcemanager.recovery.ZKRMStateStore: Application state data size for application<span class="built_in">_</span>1607589684539<span class="built_in">_</span>0001 is 1515. exceeds the maximum allowed size 512 for application data.</span><br><span class="line">2020-12-10 16:53:48,086 INFO org.apache.hadoop.yarn.server.resourcemanager.recovery.ZKRMStateStore: Application state data size for application<span class="built_in">_</span>1607590418121<span class="built_in">_</span>0001 is 1515. exceeds the maximum allowed size 512 for application data.</span><br><span class="line"></span><br><span class="line"><span class="params">#</span> RM 具体 Warn 信息：</span><br><span class="line">2020-12-10 16:53:49,377 WARN org.apache.hadoop.security.UserGroupInformation: PriviledgedActionException as:kwang (auth:SIMPLE) cause:org.apache.hadoop.yarn.exceptions.ApplicationNotFoundException: Application with id &#x27;application<span class="built_in">_</span>1607590418121<span class="built_in">_</span>0001&#x27; doesn&#x27;t exist in RM.</span><br><span class="line">2020-12-10 16:53:49,377 INFO org.apache.hadoop.ipc.Server: IPC Server handler 0 on 8032, call org.apache.hadoop.yarn.api.ApplicationClientProtocolPB.getApplicationReport from 10.197.1.141:56026 Call<span class="params">#6</span>3 Retry<span class="params">#0</span></span><br><span class="line">org.apache.hadoop.yarn.exceptions.ApplicationNotFoundException: Application with id &#x27;application<span class="built_in">_</span>1607590418121<span class="built_in">_</span>0001&#x27; doesn&#x27;t exist in RM.</span><br><span class="line">        at org.apache.hadoop.yarn.server.resourcemanager.ClientRMService.getApplicationReport(ClientRMService.java:324)</span><br><span class="line">        at org.apache.hadoop.yarn.api.impl.pb.service.ApplicationClientProtocolPBServiceImpl.getApplicationReport(ApplicationClientProtocolPBServiceImpl.java:170)</span><br><span class="line">        at org.apache.hadoop.yarn.proto.ApplicationClientProtocol<span class="built_in">$</span>ApplicationClientProtocolService<span class="built_in">$</span>2.callBlockingMethod(ApplicationClientProtocol.java:401)</span><br><span class="line">        at org.apache.hadoop.ipc.ProtobufRpcEngine<span class="built_in">$</span>Server<span class="built_in">$</span>ProtoBufRpcInvoker.call(ProtobufRpcEngine.java:617)</span><br><span class="line">        at org.apache.hadoop.ipc.RPC<span class="built_in">$</span>Server.call(RPC.java:1073)</span><br><span class="line">        at org.apache.hadoop.ipc.Server<span class="built_in">$</span>Handler<span class="built_in">$</span>1.run(Server.java:2281)</span><br><span class="line">        at org.apache.hadoop.ipc.Server<span class="built_in">$</span>Handler<span class="built_in">$</span>1.run(Server.java:2277)</span><br><span class="line">        at java.security.AccessController.doPrivileged(Native Method)</span><br><span class="line">        at javax.security.auth.Subject.doAs(Subject.java:422)</span><br><span class="line">        at org.apache.hadoop.security.UserGroupInformation.doAs(UserGroupInformation.java:1924)</span><br><span class="line">        at org.apache.hadoop.ipc.Server<span class="built_in">$</span>Handler.run(Server.java:2275)</span><br></pre></td></tr></table></figure>
+
+<h2 id="4-3-线上参数配置"><a href="#4-3-线上参数配置" class="headerlink" title="4.3 线上参数配置"></a>4.3 线上参数配置</h2><p>设置 YARN app 允许写 ZNode 的最大值（4<em>1024</em>1024 B，即 4M），重启 RM。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">参数：yarn-site.xml 的 ResourceManager 高级配置代码段（安全阀）</span><br><span class="line">值：</span><br><span class="line">&lt;property&gt;</span><br><span class="line">    &lt;name&gt;yarn.resourcemanager.zk-max-znode-size.bytes&lt;/name&gt;</span><br><span class="line">    &lt;value&gt;<span class="number">4194304</span>&lt;/value&gt;</span><br><span class="line">&lt;/property&gt;</span><br></pre></td></tr></table></figure>
+
+<p>前面在 2.2 小节中分析了作业在更新 Application 或 AppAttemp 状态时，会通过重试的方式向 ZK 的 ZNode 中写入数据，线上环境默认的重试次数为 1000 次，重试间隔为 60ms，而一旦任务出现异常时，这种高频次的写入会对 ZK 或 RM 服务造成一定的压力，因此可以调小作业的重试次数，减少重试时对服务的压力。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">参数：yarn-site.xml 的 ResourceManager 高级配置代码段（安全阀）</span><br><span class="line">值：</span><br><span class="line">&lt;property&gt;</span><br><span class="line">    &lt;name&gt;yarn.resourcemanager.zk-num-retries&lt;/name&gt;</span><br><span class="line">    &lt;value&gt;<span class="number">100</span>&lt;/value&gt;</span><br><span class="line">&lt;/property&gt;</span><br></pre></td></tr></table></figure>
+
+<h1 id="参考资料"><a href="#参考资料" class="headerlink" title="参考资料"></a>参考资料</h1><ul>
+<li><p><a target="_blank" rel="noopener" href="https://github.com/apache/hadoop/blob/trunk/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/recovery/ZKRMStateStore.java">Hadoop官方源码</a></p>
+</li>
+<li><p><a target="_blank" rel="noopener" href="https://issues.apache.org/jira/browse/YARN-2368">issue YARN-2368</a></p>
+</li>
+<li><p><a target="_blank" rel="noopener" href="https://cloud.tencent.com/developer/article/1629687">ZooKeeper节点数据量限制引起的Hadoop YARN ResourceManager崩溃原因分析</a></p>
+</li>
+<li><p><a target="_blank" rel="noopener" href="https://blog.csdn.net/Androidlushangderen/article/details/48224707">YARN源码分析(三)—–ResourceManager HA之应用状态存储与恢复</a></p>
+</li>
+</ul>
+
+    </div>
+
+    
+    
+    
+
+    <div>
+      
+      <div>
+	 
+		<div style="text-align:center;color:#bfbfbf;font-size:16px;"> 
+			<span>-------- 本文结束 </span> <i class="fa fa-paw"></i> <span> 感谢阅读 --------</span>
+		</div> 
+	
+</div>
+      
+    </div>
+        <div class="reward-container">
+  <div></div>
+  <button onclick="var qr = document.getElementById('qr'); qr.style.display = (qr.style.display === 'none') ? 'block' : 'none';">
+    请我喝杯咖啡~
+  </button>
+  <div id="qr" style="display: none;">
+      
+      <div style="display: inline-block;">
+        <img src="/images/wechatpay.png" alt="笨小康 微信打赏">
+        <p>微信打赏</p>
+      </div>
+      
+      <div style="display: inline-block;">
+        <img src="/images/alipay.png" alt="笨小康 支付宝打赏">
+        <p>支付宝打赏</p>
+      </div>
+
+  </div>
+</div>
+
+
+      <footer class="post-footer">
+          <div class="post-tags">
+              <a href="/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/" rel="tag"><i class="fa fa-tag"></i> 大数据</a>
+              <a href="/tags/YARN/" rel="tag"><i class="fa fa-tag"></i> YARN</a>
+          </div>
+
+        
+
+
+        
+    <div class="post-nav">
+      <div class="post-nav-item">
+    <a href="/2021/11/16/YARN%E8%81%9A%E5%90%88%E6%97%A5%E5%BF%97%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90%E5%8F%8A%E4%BC%98%E5%8C%96/" rel="prev" title="YARN聚合日志源码分析及优化">
+      <i class="fa fa-chevron-left"></i> YARN聚合日志源码分析及优化
+    </a></div>
+      <div class="post-nav-item"></div>
+    </div>
+      </footer>
+    
+  </article>
+  
+  
+  
+
+
+
+
+          </div>
+          
+
+<script>
+  window.addEventListener('tabs:register', () => {
+    let { activeClass } = CONFIG.comments;
+    if (CONFIG.comments.storage) {
+      activeClass = localStorage.getItem('comments_active') || activeClass;
+    }
+    if (activeClass) {
+      let activeTab = document.querySelector(`a[href="#comment-${activeClass}"]`);
+      if (activeTab) {
+        activeTab.click();
+      }
+    }
+  });
+  if (CONFIG.comments.storage) {
+    window.addEventListener('tabs:click', event => {
+      if (!event.target.matches('.tabs-comment .tab-content .tab-pane')) return;
+      let commentClass = event.target.classList[1];
+      localStorage.setItem('comments_active', commentClass);
+    });
+  }
+</script>
+
+        </div>
+          
+  
+  <div class="toggle sidebar-toggle">
+    <span class="toggle-line toggle-line-first"></span>
+    <span class="toggle-line toggle-line-middle"></span>
+    <span class="toggle-line toggle-line-last"></span>
+  </div>
+
+  <aside class="sidebar">
+    <div class="sidebar-inner">
+
+      <ul class="sidebar-nav motion-element">
+        <li class="sidebar-nav-toc">
+          文章目录
+        </li>
+        <li class="sidebar-nav-overview">
+          站点概览
+        </li>
+      </ul>
+
+      <!--noindex-->
+      <div class="post-toc-wrap sidebar-panel">
+          <div class="post-toc motion-element"><ol class="nav"><li class="nav-item nav-level-1"><a class="nav-link" href="#1-%E9%97%AE%E9%A2%98%E5%A4%8D%E7%8E%B0"><span class="nav-text">1. 问题复现</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#2-RM-%E4%B8%8E-ZNode-%E4%BA%A4%E4%BA%92%E5%8E%9F%E7%90%86"><span class="nav-text">2. RM 与 ZNode 交互原理</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#2-1-RM-%E7%8A%B6%E6%80%81%E5%9C%A8-ZK-%E4%B8%AD%E7%9A%84%E5%AD%98%E5%82%A8"><span class="nav-text">2.1 RM 状态在 ZK 中的存储</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#2-2-ZK-%E5%AD%98%E5%82%A8-amp-%E6%9B%B4%E6%96%B0-RM-%E4%BF%A1%E6%81%AF%E7%8A%B6%E6%80%81%E9%80%BB%E8%BE%91"><span class="nav-text">2.2 ZK 存储&amp;更新 RM 信息状态逻辑</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#2-3-ZK-%E5%88%A0%E9%99%A4-RM-%E4%BF%A1%E6%81%AF%E7%8A%B6%E6%80%81%E9%80%BB%E8%BE%91"><span class="nav-text">2.3 ZK 删除 RM 信息状态逻辑</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#3-%E6%8A%80%E6%9C%AF%E6%96%B9%E6%A1%88%E8%B0%83%E7%A0%94%E5%8F%8A%E4%BC%98%E5%8C%96"><span class="nav-text">3. 技术方案调研及优化</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#3-1-Hadoop-2-9-0%E4%B9%8B%E5%89%8D%E4%BF%AE%E5%A4%8D%E6%96%B9%E6%B3%95"><span class="nav-text">3.1 Hadoop 2.9.0之前修复方法</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#3-2-Hadoop-2-9-0%E5%8F%8A%E5%90%8E%E7%BB%AD%E7%89%88%E6%9C%AC%E4%BF%AE%E5%A4%8D%E6%96%B9%E6%B3%95"><span class="nav-text">3.2 Hadoop 2.9.0及后续版本修复方法</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#4-%E4%BC%98%E5%8C%96%E5%8F%8A%E6%B5%8B%E8%AF%95"><span class="nav-text">4. 优化及测试</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#4-1-%E4%BC%98%E5%8C%96%E6%96%B9%E6%A1%88"><span class="nav-text">4.1 优化方案</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#4-2-%E9%AA%8C%E8%AF%81%E6%B5%8B%E8%AF%95"><span class="nav-text">4.2 验证测试</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#4-3-%E7%BA%BF%E4%B8%8A%E5%8F%82%E6%95%B0%E9%85%8D%E7%BD%AE"><span class="nav-text">4.3 线上参数配置</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="nav-text">参考资料</span></a></li></ol></div>
+      </div>
+      <!--/noindex-->
+
+      <div class="site-overview-wrap sidebar-panel">
+        <div class="site-author motion-element" itemprop="author" itemscope itemtype="http://schema.org/Person">
+  <p class="site-author-name" itemprop="name">笨小康</p>
+  <div class="site-description" itemprop="description"></div>
+</div>
+<div class="site-state-wrap motion-element">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+          <a href="/archives/">
+        
+          <span class="site-state-item-count">10</span>
+          <span class="site-state-item-name">日志</span>
+        </a>
+      </div>
+      <div class="site-state-item site-state-categories">
+            <a href="/categories/">
+          
+        <span class="site-state-item-count">3</span>
+        <span class="site-state-item-name">分类</span></a>
+      </div>
+      <div class="site-state-item site-state-tags">
+            <a href="/tags/">
+          
+        <span class="site-state-item-count">4</span>
+        <span class="site-state-item-name">标签</span></a>
+      </div>
+  </nav>
+</div>
+
+
+
+      </div>
+
+    </div>
+  </aside>
+  <div id="sidebar-dimmer"></div>
+
+
+      </div>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        
+
+        
+
+<div class="copyright">
+  
+  &copy; 
+  <span itemprop="copyrightYear">2021</span>
+  <span class="with-love">
+    <i class="fa fa-heart"></i>
+  </span>
+  <span class="author" itemprop="copyrightHolder">笨小康</span>
+</div>
+
+        
+
+
+
+
+
+
+
+
+      </div>
+    </footer>
+  </div>
+
+  
+  <script src="/lib/anime.min.js"></script>
+  <script src="/lib/velocity/velocity.min.js"></script>
+  <script src="/lib/velocity/velocity.ui.min.js"></script>
+
+<script src="/js/utils.js"></script>
+
+<script src="/js/motion.js"></script>
+
+
+<script src="/js/schemes/pisces.js"></script>
+
+
+<script src="/js/next-boot.js"></script>
+
+
+
+
+  
+
+
+
+
+  
+<script src="/js/local-search.js"></script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+  
+
+</body>
+</html>
