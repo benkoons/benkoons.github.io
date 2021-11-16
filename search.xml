@@ -1,6 +1,103 @@
 <?xml version="1.0" encoding="utf-8"?>
 <search>
   <entry>
+    <title>Hexo+Github Pages博客搭建手册</title>
+    <url>/2021/11/09/Hexo-Github-Pages%E5%8D%9A%E5%AE%A2%E6%90%AD%E5%BB%BA%E6%89%8B%E5%86%8C/</url>
+    <content><![CDATA[<p>花了几天时间，终于搭建了心满意足的个人网站，欢迎来访：<a href="https://benkoons.github.io/">笨小康的个人网站</a>。本文主要介绍如何使用 Hexo + Github Pages 搭建个人网站，并发布自己的第一篇文章。</p>
+<h1 id="1-Hexo-Github-Pages介绍"><a href="#1-Hexo-Github-Pages介绍" class="headerlink" title="1. Hexo/Github Pages介绍"></a>1. Hexo/Github Pages介绍</h1><p>Hexo是一款基于Node.js的静态博客框架，可以方便的生成静态网页托管在GitHub上，是搭建博客的首选框架。大家可以进入 <a href="https://hexo.io/zh-cn/docs/">Hexo</a> 官网进行详细查看，因为Hexo的创建者是台湾人，对中文的支持很友好，可以选择中文进行查看。</p>
+<p>Github Pages 是 Github 提供的一个静态站点托管服务，旨在直接从 GitHub 仓库中直接托管您的个人、组织或项目页面。</p>
+<h1 id="2-Hexo搭建博客"><a href="#2-Hexo搭建博客" class="headerlink" title="2. Hexo搭建博客"></a>2. Hexo搭建博客</h1><p>本博客搭建文档主要是针对 mac 电脑。</p>
+<h2 id="2-1-安装Homebrew"><a href="#2-1-安装Homebrew" class="headerlink" title="2.1 安装Homebrew"></a>2.1 安装Homebrew</h2><p>mac 系统和 Linux 比较类似，安装软件也可以通过 shell 命令来完成，和 Linux 的 yum install 命令类似，mac 提供了 brew install 的方式安装软件，brew 命令使用需要安装 Homebrew。</p>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">/usr/bin/ruby -e &quot;$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)&quot;</span><br></pre></td></tr></table></figure>
+
+<h2 id="2-2-安装git"><a href="#2-2-安装git" class="headerlink" title="2.2 安装git"></a>2.2 安装git</h2><figure class="highlight shell"><table><tr><td class="code"><pre><span class="line"><span class="meta">#</span><span class="bash"> 安装命令</span></span><br><span class="line">brew install git</span><br><span class="line"><span class="meta">#</span><span class="bash"> 查看版本</span></span><br><span class="line">git -v</span><br></pre></td></tr></table></figure>
+
+<h2 id="2-3-安装nodejs"><a href="#2-3-安装nodejs" class="headerlink" title="2.3 安装nodejs"></a>2.3 安装nodejs</h2><p>Hexo是基于nodeJS编写的，所以需要安装一下nodeJs和里面的npm工具。</p>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line"><span class="meta">#</span><span class="bash"> 安装命令</span></span><br><span class="line">brew install node</span><br><span class="line">brew install npm</span><br><span class="line"><span class="meta">#</span><span class="bash"> 查看版本</span></span><br><span class="line">node -v</span><br><span class="line">npm -v</span><br></pre></td></tr></table></figure>
+
+<h2 id="2-4-安装Hexo"><a href="#2-4-安装Hexo" class="headerlink" title="2.4 安装Hexo"></a>2.4 安装Hexo</h2><figure class="highlight shell"><table><tr><td class="code"><pre><span class="line"><span class="meta">#</span><span class="bash"> 安装命令</span></span><br><span class="line">npm install -g hexo-cli</span><br><span class="line"><span class="meta"></span></span><br><span class="line"><span class="meta">#</span><span class="bash"> 查看版本</span></span><br><span class="line">hexo -v</span><br></pre></td></tr></table></figure>
+
+<h2 id="2-5-初始化Hexo"><a href="#2-5-初始化Hexo" class="headerlink" title="2.5 初始化Hexo"></a>2.5 初始化Hexo</h2><p>首先，对 Hexo 目录（目录名自定义，作为本地博客存储仓库）进行初始化，并安装相关依赖。</p>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line"><span class="meta">#</span><span class="bash"> 初始化 Hexo，blog 名字自定义</span></span><br><span class="line">hexo init blog</span><br><span class="line"><span class="meta"></span></span><br><span class="line"><span class="meta">#</span><span class="bash"> 进入到 blog 文件夹</span></span><br><span class="line">cd blog</span><br><span class="line"><span class="meta"></span></span><br><span class="line"><span class="meta">#</span><span class="bash"> 安装依赖</span></span><br><span class="line">npm install</span><br></pre></td></tr></table></figure>
+
+<p>文件夹下包括一些文件和目录：</p>
+<ul>
+<li><p>node_modules: 依赖包</p>
+</li>
+<li><p>public：存放生成的页面</p>
+</li>
+<li><p>scaffolds：生成文章的一些模板</p>
+</li>
+<li><p>source：用来存放你的文章</p>
+</li>
+<li><p>themes：主题，Hexo可以扩展其他主题风格</p>
+</li>
+<li><p>_config.yml: 博客的全局配置文件</p>
+</li>
+</ul>
+<p>其次，部署 Hexo 文件，并在本地启动服务器。</p>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line"><span class="meta">#</span><span class="bash"> 部署形成的文件</span></span><br><span class="line">hexo g（hexo generate 简写）</span><br><span class="line"><span class="meta"></span></span><br><span class="line"><span class="meta">#</span><span class="bash"> 启动服务器</span></span><br><span class="line">hexo s (hexo server 简写）</span><br></pre></td></tr></table></figure>
+
+<p>最后，查看本地部署结果，可以在浏览器访问 <a href="http://localhost:4000/">http://localhost:4000/</a> 查看，效果如下（这里只表明在本地部署成功，无法在外网访问，还需要绑定 Github）。</p>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/09/df2e38dca622ea00495961e453bdfaac-1635943805021-e4322cfd-6908-4805-b52c-e8d10a3bca2f-1678db.png" alt="img"></p>
+<h2 id="2-6-Github创建个人仓库"><a href="#2-6-Github创建个人仓库" class="headerlink" title="2.6 Github创建个人仓库"></a>2.6 Github创建个人仓库</h2><p>在 GitHub.com 中通过 New repository 创建一个仓库，创建一个和你用户名相同的仓库，后面加 .github.io。只有这样，将 Hexo 部署到GitHub page 时才会被识别，也就是xxxx.github.io，其中xxx就是你注册GitHub的用户名，<strong>其他信息保持默认即可，也可以勾选创建 README 文件。</strong>仓库创建如下：</p>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/09/9cede1d05042f66fd3056045501f434d-1636388333521-0cc72286-84e4-4617-9d37-f06c5917e18f-d9afa4.png" alt="img"></p>
+<h2 id="2-7-生成SSH添加到Github"><a href="#2-7-生成SSH添加到Github" class="headerlink" title="2.7 生成SSH添加到Github"></a>2.7 生成SSH添加到Github</h2><h3 id="2-7-1-配置个人信息"><a href="#2-7-1-配置个人信息" class="headerlink" title="2.7.1 配置个人信息"></a>2.7.1 配置个人信息</h3><p>回到 git bash 中，配置用户名和邮箱，用户名为 Github 用户名，邮箱为 Github 使用的邮箱，主要用于 Github 验证你的账号信息。</p>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">git config --global user.name &quot;yourname&quot;</span><br><span class="line">git config --global user.email &quot;youremail&quot;</span><br></pre></td></tr></table></figure>
+
+<p>check 用户名和邮箱是否正确。</p>
+<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">git config user.name</span><br><span class="line">git config user.email</span><br></pre></td></tr></table></figure>
+
+<h3 id="2-7-2-创建SSH-Token"><a href="#2-7-2-创建SSH-Token" class="headerlink" title="2.7.2 创建SSH Token"></a>2.7.2 创建SSH Token</h3><figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">ssh-keygen -t rsa -C <span class="string">&quot;youremail&quot;</span></span><br></pre></td></tr></table></figure>
+
+<p>.ssh 目录是你电脑生成的公钥 id_rsa.pub 和私钥 id_rsa，公钥 id_rsa.pub 是公开的，可以对外给别人看，Github 也正是使用这个公钥来允许来自你电脑的访问。</p>
+<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">benkoonsMacBook-Pro:_posts benkoons$ ls -l ~/.ssh/</span><br><span class="line">total 32</span><br><span class="line">-rw-------  1 sshull  staff  1876 10 30 22:51 id_rsa</span><br><span class="line">-rw-r--r--  1 sshull  staff   401 10 30 22:51 id_rsa.pub</span><br><span class="line">-rw-------  1 sshull  staff   671 10 31 02:00 known_hosts</span><br></pre></td></tr></table></figure>
+
+<h3 id="2-7-3-Github配置公钥"><a href="#2-7-3-Github配置公钥" class="headerlink" title="2.7.3 Github配置公钥"></a>2.7.3 Github配置公钥</h3><p>在GitHub的setting中，找到SSH keys的设置选项，点击 <code>New SSH key</code>把你的 <code>id_rsa_pub</code>里面的信息复制进去。</p>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/09/74f3e883cee1c34c22324cfd0671ffda-1636389388364-21b0b065-c70d-40be-b2b9-3a78d54177ad-99de59.png" alt="img"></p>
+<h3 id="2-7-4-测试连接"><a href="#2-7-4-测试连接" class="headerlink" title="2.7.4 测试连接"></a>2.7.4 测试连接</h3><p>使用如下命令测试连接 Github 是否成功，命令不需要修改。</p>
+<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">ssh -T git@github.com   // 不修改</span><br></pre></td></tr></table></figure>
+
+<h2 id="2-8-将Hexo部署到Github"><a href="#2-8-将Hexo部署到Github" class="headerlink" title="2.8 将Hexo部署到Github"></a>2.8 将Hexo部署到Github</h2><p>部署前先安装 deployer-git 依赖，然后才能用命令将 Hexo 部署到 Github。</p>
+<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">npm install hexo-deployer-git --save</span><br></pre></td></tr></table></figure>
+
+<p>将hexo和GitHub关联起来，也就是将hexo生成的文章部署到GitHub上，打开站点配置文件 _config.yml，翻到最后，需改 deploy 信息。</p>
+<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line"><span class="comment"># Deployment</span></span><br><span class="line"><span class="comment">## Docs: https://hexo.io/docs/one-command-deployment</span></span><br><span class="line">deploy:</span><br><span class="line">  <span class="built_in">type</span>: git</span><br><span class="line">  repo: git@github.com:benkoons/benkoons.github.io.git</span><br><span class="line">  branch: master</span><br></pre></td></tr></table></figure>
+
+<p>部署之后发布站点。</p>
+<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">hexo clean	<span class="comment"># 清除之前生成的东西，可不加</span></span><br><span class="line">hexo g  		<span class="comment"># 生成静态文章</span></span><br><span class="line">hexo d			<span class="comment"># 部署网站</span></span><br></pre></td></tr></table></figure>
+
+<p>部署时可能需要输入 ssh 密码（即电脑密码），发布成功后可通过 <a href="https://benkoons.github.io/">https://benkoons.github.io/</a> 查看网站。</p>
+<h1 id="3-Hexo常用命令"><a href="#3-Hexo常用命令" class="headerlink" title="3. Hexo常用命令"></a>3. Hexo常用命令</h1><p>常见命令：</p>
+<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">hexo new <span class="string">&quot;postName&quot;</span> 	<span class="comment"># 新建文章</span></span><br><span class="line">hexo new page <span class="string">&quot;pageName&quot;</span> 	<span class="comment"># 新建页面</span></span><br><span class="line">hexo generate 		<span class="comment"># 生成静态页面至public目录</span></span><br><span class="line">hexo server 			<span class="comment"># 开启预览访问端口（默认端口4000，&#x27;ctrl + c&#x27;关闭server）</span></span><br><span class="line">hexo deploy 			<span class="comment"># 部署到GitHub</span></span><br><span class="line">hexo <span class="built_in">help</span>  				<span class="comment"># 查看帮助</span></span><br><span class="line">hexo version  		<span class="comment"># 查看Hexo的版本</span></span><br></pre></td></tr></table></figure>
+
+<p>缩写：</p>
+<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">hexo n == hexo new</span><br><span class="line">hexo g == hexo generate</span><br><span class="line">hexo s == hexo server</span><br><span class="line">hexo d == hexo deploy</span><br></pre></td></tr></table></figure>
+
+<p>组合命令：</p>
+<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">hexo s -g 	<span class="comment"># 生成并本地预览</span></span><br><span class="line">hexo d -g 	<span class="comment"># 生成并上传</span></span><br></pre></td></tr></table></figure>
+
+<h1 id="4-发布第一篇文章"><a href="#4-发布第一篇文章" class="headerlink" title="4. 发布第一篇文章"></a>4. 发布第一篇文章</h1><p>在 blog 目录下通过 Hexo 命令新建一篇文章。</p>
+<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">hexo new <span class="string">&quot;笨小康的第一篇文章&quot;</span></span><br></pre></td></tr></table></figure>
+
+<p>一般情况下，文章的格式如下：</p>
+<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">---</span><br><span class="line">title: 笨小康的第一篇文章</span><br><span class="line">date: 2021-11-09 00:51:07</span><br><span class="line">tags:</span><br><span class="line">- 标签1</span><br><span class="line">- 标签2</span><br><span class="line">categories:</span><br><span class="line">- 分类1</span><br><span class="line">- 分类2</span><br><span class="line">---</span><br><span class="line"></span><br><span class="line"></span><br><span class="line">以下是正文内容～～</span><br></pre></td></tr></table></figure>
+
+<p>发布查看</p>
+<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">hexo s		<span class="comment"># 发布本地预览</span></span><br><span class="line">hexo d -g	<span class="comment"># 发布Githuh查看</span></span><br></pre></td></tr></table></figure>
+
+<h1 id="参考链接"><a href="#参考链接" class="headerlink" title="参考链接"></a>参考链接</h1><ul>
+<li><a href="https://blog.csdn.net/sinat_37781304/article/details/82729029/">hexo史上最全搭建教程</a></li>
+</ul>
+]]></content>
+      <categories>
+        <category>tools</category>
+      </categories>
+      <tags>
+        <tag>工具使用</tag>
+      </tags>
+  </entry>
+  <entry>
     <title>Markdown语法手册</title>
     <url>/2021/11/08/Markdown%E8%AF%AD%E6%B3%95%E6%89%8B%E5%86%8C/</url>
     <content><![CDATA[<p>介绍 Markdown 写文章的一些常见用法。</p>
@@ -148,103 +245,6 @@
       </tags>
   </entry>
   <entry>
-    <title>Hexo+Github Pages博客搭建手册</title>
-    <url>/2021/11/09/Hexo-Github-Pages%E5%8D%9A%E5%AE%A2%E6%90%AD%E5%BB%BA%E6%89%8B%E5%86%8C/</url>
-    <content><![CDATA[<p>花了几天时间，终于搭建了心满意足的个人网站，欢迎来访：<a href="https://benkoons.github.io/">笨小康的个人网站</a>。本文主要介绍如何使用 Hexo + Github Pages 搭建个人网站，并发布自己的第一篇文章。</p>
-<h1 id="1-Hexo-Github-Pages介绍"><a href="#1-Hexo-Github-Pages介绍" class="headerlink" title="1. Hexo/Github Pages介绍"></a>1. Hexo/Github Pages介绍</h1><p>Hexo是一款基于Node.js的静态博客框架，可以方便的生成静态网页托管在GitHub上，是搭建博客的首选框架。大家可以进入 <a href="https://hexo.io/zh-cn/docs/">Hexo</a> 官网进行详细查看，因为Hexo的创建者是台湾人，对中文的支持很友好，可以选择中文进行查看。</p>
-<p>Github Pages 是 Github 提供的一个静态站点托管服务，旨在直接从 GitHub 仓库中直接托管您的个人、组织或项目页面。</p>
-<h1 id="2-Hexo搭建博客"><a href="#2-Hexo搭建博客" class="headerlink" title="2. Hexo搭建博客"></a>2. Hexo搭建博客</h1><p>本博客搭建文档主要是针对 mac 电脑。</p>
-<h2 id="2-1-安装Homebrew"><a href="#2-1-安装Homebrew" class="headerlink" title="2.1 安装Homebrew"></a>2.1 安装Homebrew</h2><p>mac 系统和 Linux 比较类似，安装软件也可以通过 shell 命令来完成，和 Linux 的 yum install 命令类似，mac 提供了 brew install 的方式安装软件，brew 命令使用需要安装 Homebrew。</p>
-<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">/usr/bin/ruby -e &quot;$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)&quot;</span><br></pre></td></tr></table></figure>
-
-<h2 id="2-2-安装git"><a href="#2-2-安装git" class="headerlink" title="2.2 安装git"></a>2.2 安装git</h2><figure class="highlight shell"><table><tr><td class="code"><pre><span class="line"><span class="meta">#</span><span class="bash"> 安装命令</span></span><br><span class="line">brew install git</span><br><span class="line"><span class="meta">#</span><span class="bash"> 查看版本</span></span><br><span class="line">git -v</span><br></pre></td></tr></table></figure>
-
-<h2 id="2-3-安装nodejs"><a href="#2-3-安装nodejs" class="headerlink" title="2.3 安装nodejs"></a>2.3 安装nodejs</h2><p>Hexo是基于nodeJS编写的，所以需要安装一下nodeJs和里面的npm工具。</p>
-<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line"><span class="meta">#</span><span class="bash"> 安装命令</span></span><br><span class="line">brew install node</span><br><span class="line">brew install npm</span><br><span class="line"><span class="meta">#</span><span class="bash"> 查看版本</span></span><br><span class="line">node -v</span><br><span class="line">npm -v</span><br></pre></td></tr></table></figure>
-
-<h2 id="2-4-安装Hexo"><a href="#2-4-安装Hexo" class="headerlink" title="2.4 安装Hexo"></a>2.4 安装Hexo</h2><figure class="highlight shell"><table><tr><td class="code"><pre><span class="line"><span class="meta">#</span><span class="bash"> 安装命令</span></span><br><span class="line">npm install -g hexo-cli</span><br><span class="line"><span class="meta"></span></span><br><span class="line"><span class="meta">#</span><span class="bash"> 查看版本</span></span><br><span class="line">hexo -v</span><br></pre></td></tr></table></figure>
-
-<h2 id="2-5-初始化Hexo"><a href="#2-5-初始化Hexo" class="headerlink" title="2.5 初始化Hexo"></a>2.5 初始化Hexo</h2><p>首先，对 Hexo 目录（目录名自定义，作为本地博客存储仓库）进行初始化，并安装相关依赖。</p>
-<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line"><span class="meta">#</span><span class="bash"> 初始化 Hexo，blog 名字自定义</span></span><br><span class="line">hexo init blog</span><br><span class="line"><span class="meta"></span></span><br><span class="line"><span class="meta">#</span><span class="bash"> 进入到 blog 文件夹</span></span><br><span class="line">cd blog</span><br><span class="line"><span class="meta"></span></span><br><span class="line"><span class="meta">#</span><span class="bash"> 安装依赖</span></span><br><span class="line">npm install</span><br></pre></td></tr></table></figure>
-
-<p>文件夹下包括一些文件和目录：</p>
-<ul>
-<li><p>node_modules: 依赖包</p>
-</li>
-<li><p>public：存放生成的页面</p>
-</li>
-<li><p>scaffolds：生成文章的一些模板</p>
-</li>
-<li><p>source：用来存放你的文章</p>
-</li>
-<li><p>themes：主题，Hexo可以扩展其他主题风格</p>
-</li>
-<li><p>_config.yml: 博客的全局配置文件</p>
-</li>
-</ul>
-<p>其次，部署 Hexo 文件，并在本地启动服务器。</p>
-<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line"><span class="meta">#</span><span class="bash"> 部署形成的文件</span></span><br><span class="line">hexo g（hexo generate 简写）</span><br><span class="line"><span class="meta"></span></span><br><span class="line"><span class="meta">#</span><span class="bash"> 启动服务器</span></span><br><span class="line">hexo s (hexo server 简写）</span><br></pre></td></tr></table></figure>
-
-<p>最后，查看本地部署结果，可以在浏览器访问 <a href="http://localhost:4000/">http://localhost:4000/</a> 查看，效果如下（这里只表明在本地部署成功，无法在外网访问，还需要绑定 Github）。</p>
-<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/09/df2e38dca622ea00495961e453bdfaac-1635943805021-e4322cfd-6908-4805-b52c-e8d10a3bca2f-1678db.png" alt="img"></p>
-<h2 id="2-6-Github创建个人仓库"><a href="#2-6-Github创建个人仓库" class="headerlink" title="2.6 Github创建个人仓库"></a>2.6 Github创建个人仓库</h2><p>在 GitHub.com 中通过 New repository 创建一个仓库，创建一个和你用户名相同的仓库，后面加 .github.io。只有这样，将 Hexo 部署到GitHub page 时才会被识别，也就是xxxx.github.io，其中xxx就是你注册GitHub的用户名，<strong>其他信息保持默认即可，也可以勾选创建 README 文件。</strong>仓库创建如下：</p>
-<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/09/9cede1d05042f66fd3056045501f434d-1636388333521-0cc72286-84e4-4617-9d37-f06c5917e18f-d9afa4.png" alt="img"></p>
-<h2 id="2-7-生成SSH添加到Github"><a href="#2-7-生成SSH添加到Github" class="headerlink" title="2.7 生成SSH添加到Github"></a>2.7 生成SSH添加到Github</h2><h3 id="2-7-1-配置个人信息"><a href="#2-7-1-配置个人信息" class="headerlink" title="2.7.1 配置个人信息"></a>2.7.1 配置个人信息</h3><p>回到 git bash 中，配置用户名和邮箱，用户名为 Github 用户名，邮箱为 Github 使用的邮箱，主要用于 Github 验证你的账号信息。</p>
-<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">git config --global user.name &quot;yourname&quot;</span><br><span class="line">git config --global user.email &quot;youremail&quot;</span><br></pre></td></tr></table></figure>
-
-<p>check 用户名和邮箱是否正确。</p>
-<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">git config user.name</span><br><span class="line">git config user.email</span><br></pre></td></tr></table></figure>
-
-<h3 id="2-7-2-创建SSH-Token"><a href="#2-7-2-创建SSH-Token" class="headerlink" title="2.7.2 创建SSH Token"></a>2.7.2 创建SSH Token</h3><figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">ssh-keygen -t rsa -C <span class="string">&quot;youremail&quot;</span></span><br></pre></td></tr></table></figure>
-
-<p>.ssh 目录是你电脑生成的公钥 id_rsa.pub 和私钥 id_rsa，公钥 id_rsa.pub 是公开的，可以对外给别人看，Github 也正是使用这个公钥来允许来自你电脑的访问。</p>
-<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">benkoonsMacBook-Pro:_posts benkoons$ ls -l ~/.ssh/</span><br><span class="line">total 32</span><br><span class="line">-rw-------  1 sshull  staff  1876 10 30 22:51 id_rsa</span><br><span class="line">-rw-r--r--  1 sshull  staff   401 10 30 22:51 id_rsa.pub</span><br><span class="line">-rw-------  1 sshull  staff   671 10 31 02:00 known_hosts</span><br></pre></td></tr></table></figure>
-
-<h3 id="2-7-3-Github配置公钥"><a href="#2-7-3-Github配置公钥" class="headerlink" title="2.7.3 Github配置公钥"></a>2.7.3 Github配置公钥</h3><p>在GitHub的setting中，找到SSH keys的设置选项，点击 <code>New SSH key</code>把你的 <code>id_rsa_pub</code>里面的信息复制进去。</p>
-<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/09/74f3e883cee1c34c22324cfd0671ffda-1636389388364-21b0b065-c70d-40be-b2b9-3a78d54177ad-99de59.png" alt="img"></p>
-<h3 id="2-7-4-测试连接"><a href="#2-7-4-测试连接" class="headerlink" title="2.7.4 测试连接"></a>2.7.4 测试连接</h3><p>使用如下命令测试连接 Github 是否成功，命令不需要修改。</p>
-<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">ssh -T git@github.com   // 不修改</span><br></pre></td></tr></table></figure>
-
-<h2 id="2-8-将Hexo部署到Github"><a href="#2-8-将Hexo部署到Github" class="headerlink" title="2.8 将Hexo部署到Github"></a>2.8 将Hexo部署到Github</h2><p>部署前先安装 deployer-git 依赖，然后才能用命令将 Hexo 部署到 Github。</p>
-<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">npm install hexo-deployer-git --save</span><br></pre></td></tr></table></figure>
-
-<p>将hexo和GitHub关联起来，也就是将hexo生成的文章部署到GitHub上，打开站点配置文件 _config.yml，翻到最后，需改 deploy 信息。</p>
-<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line"><span class="comment"># Deployment</span></span><br><span class="line"><span class="comment">## Docs: https://hexo.io/docs/one-command-deployment</span></span><br><span class="line">deploy:</span><br><span class="line">  <span class="built_in">type</span>: git</span><br><span class="line">  repo: git@github.com:benkoons/benkoons.github.io.git</span><br><span class="line">  branch: master</span><br></pre></td></tr></table></figure>
-
-<p>部署之后发布站点。</p>
-<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">hexo clean	<span class="comment"># 清除之前生成的东西，可不加</span></span><br><span class="line">hexo g  		<span class="comment"># 生成静态文章</span></span><br><span class="line">hexo d			<span class="comment"># 部署网站</span></span><br></pre></td></tr></table></figure>
-
-<p>部署时可能需要输入 ssh 密码（即电脑密码），发布成功后可通过 <a href="https://benkoons.github.io/">https://benkoons.github.io/</a> 查看网站。</p>
-<h1 id="3-Hexo常用命令"><a href="#3-Hexo常用命令" class="headerlink" title="3. Hexo常用命令"></a>3. Hexo常用命令</h1><p>常见命令：</p>
-<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">hexo new <span class="string">&quot;postName&quot;</span> 	<span class="comment"># 新建文章</span></span><br><span class="line">hexo new page <span class="string">&quot;pageName&quot;</span> 	<span class="comment"># 新建页面</span></span><br><span class="line">hexo generate 		<span class="comment"># 生成静态页面至public目录</span></span><br><span class="line">hexo server 			<span class="comment"># 开启预览访问端口（默认端口4000，&#x27;ctrl + c&#x27;关闭server）</span></span><br><span class="line">hexo deploy 			<span class="comment"># 部署到GitHub</span></span><br><span class="line">hexo <span class="built_in">help</span>  				<span class="comment"># 查看帮助</span></span><br><span class="line">hexo version  		<span class="comment"># 查看Hexo的版本</span></span><br></pre></td></tr></table></figure>
-
-<p>缩写：</p>
-<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">hexo n == hexo new</span><br><span class="line">hexo g == hexo generate</span><br><span class="line">hexo s == hexo server</span><br><span class="line">hexo d == hexo deploy</span><br></pre></td></tr></table></figure>
-
-<p>组合命令：</p>
-<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">hexo s -g 	<span class="comment"># 生成并本地预览</span></span><br><span class="line">hexo d -g 	<span class="comment"># 生成并上传</span></span><br></pre></td></tr></table></figure>
-
-<h1 id="4-发布第一篇文章"><a href="#4-发布第一篇文章" class="headerlink" title="4. 发布第一篇文章"></a>4. 发布第一篇文章</h1><p>在 blog 目录下通过 Hexo 命令新建一篇文章。</p>
-<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">hexo new <span class="string">&quot;笨小康的第一篇文章&quot;</span></span><br></pre></td></tr></table></figure>
-
-<p>一般情况下，文章的格式如下：</p>
-<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">---</span><br><span class="line">title: 笨小康的第一篇文章</span><br><span class="line">date: 2021-11-09 00:51:07</span><br><span class="line">tags:</span><br><span class="line">- 标签1</span><br><span class="line">- 标签2</span><br><span class="line">categories:</span><br><span class="line">- 分类1</span><br><span class="line">- 分类2</span><br><span class="line">---</span><br><span class="line"></span><br><span class="line"></span><br><span class="line">以下是正文内容～～</span><br></pre></td></tr></table></figure>
-
-<p>发布查看</p>
-<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">hexo s		<span class="comment"># 发布本地预览</span></span><br><span class="line">hexo d -g	<span class="comment"># 发布Githuh查看</span></span><br></pre></td></tr></table></figure>
-
-<h1 id="参考链接"><a href="#参考链接" class="headerlink" title="参考链接"></a>参考链接</h1><ul>
-<li><a href="https://blog.csdn.net/sinat_37781304/article/details/82729029/">hexo史上最全搭建教程</a></li>
-</ul>
-]]></content>
-      <categories>
-        <category>tools</category>
-      </categories>
-      <tags>
-        <tag>工具使用</tag>
-      </tags>
-  </entry>
-  <entry>
     <title>YARN NodeManager总体架构</title>
     <url>/2021/11/06/YARN-NodeManager%E6%80%BB%E4%BD%93%E6%9E%B6%E6%9E%84/</url>
     <content><![CDATA[<p>NodeManager（NM）是 YARN 中单个节点上的代理，它管理 Hadoop 集群中单个计算节点，功能包括与 ResourceManager 保持通信、管理 Container 的生命周期、监控每个 Container 的资源使用情况、追踪节点健康状况、管理日志和不同应用程序用到的附属服务（auxiliary service）</p>
@@ -376,6 +376,57 @@
       </categories>
       <tags>
         <tag>随想录</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>PicGo+Typora配置Github图床手册</title>
+    <url>/2021/11/17/PicGo-Typora%E9%85%8D%E7%BD%AEGithub%E5%9B%BE%E5%BA%8A%E6%89%8B%E5%86%8C/</url>
+    <content><![CDATA[<p>最近用 Hexo + Github 搭建的个人博客写文章，发现文章里的图片在浏览器中没法加载，也不会自动上传到 Github 存稿，在网上找了一些资料，发现可以用图床来满足这个需求。图床，顾名思义，就是存储图片的服务器，能够把自己的所有照片保存在个人图床里。</p>
+<p>实现图床的方式网上资料有很多，本文主要选用 Github + PicGo + Typora 的方式实现个人图床，Github 用于图片的存储，PicGo管理图床的工具，Typora是文本编辑器，直接配置图片上传。</p>
+<p>先来直接看看效果。</p>
+<p>这张图片是 PicGo 的 UI 界面图片，我们将照片拷贝到 Typora 编辑器中，然后右键“上传图片”就将图片上传到 Github 图床了，发布的博客也可以正常访问，是不是很简洁很方便呀。</p>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/17/87408aac9a9abc2ff76a132c622f6fb4-image-20211117001921095-621a7f.png" alt="image-20211117001921095"></p>
+<h1 id="1-Github图床准备"><a href="#1-Github图床准备" class="headerlink" title="1. Github图床准备"></a>1. Github图床准备</h1><h2 id="1-1-新建Github仓库"><a href="#1-1-新建Github仓库" class="headerlink" title="1.1 新建Github仓库"></a>1.1 新建Github仓库</h2><p>Github图床当然也需要一个仓库，仓库名随便取，这里我的图床仓库命名为”blog-imgs”，由于之前创建好了，这里提示已存在，其他保持默认配置即可。</p>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/17/8efc22bd846677cb3e9df7ec5cbf33dd-8efc22bd846677cb3e9df7ec5cbf33dd-image-20211117002608528-b6b53b-8ab79f.png" alt="image-20211117002608528"></p>
+<h2 id="1-2-创建个人Token"><a href="#1-2-创建个人Token" class="headerlink" title="1.2 创建个人Token"></a>1.2 创建个人Token</h2><p>在 Github 网站的 “Settings -&gt; Developer settings -&gt; Personal access tokens“ 标签中，点击“Generate new token” 按钮新建个人 token 信息。</p>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/17/595e06f77bf855b5f9f373f414f1eb1d-image-20211117003451831-d40ef3.png" alt="image-20211117003451831"></p>
+<p>最后点击 “generate token” 即可完成 token 的创建。</p>
+<p>注意，生成的 token 在页面之后显示一次，一定要把 token 信息复制保存。</p>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/17/2d692e03546a1eaa1832ab93b0108099-image-20211117003550115-b71a12.png" alt="image-20211117003550115"></p>
+<p>至此，Github 图床已经创建完成，对外访问图床的个人 token 也创建好了。</p>
+<h1 id="2-PicGo配置Github图床"><a href="#2-PicGo配置Github图床" class="headerlink" title="2. PicGo配置Github图床"></a>2. PicGo配置Github图床</h1><h2 id="2-1-下载PicGo"><a href="#2-1-下载PicGo" class="headerlink" title="2.1 下载PicGo"></a>2.1 下载PicGo</h2><p>官网下载地址：（根据电脑版本下载对应文件即可）</p>
+<figure class="highlight tex"><table><tr><td class="code"><pre><span class="line">https://github.com/Molunerfinn/PicGo/releases</span><br></pre></td></tr></table></figure>
+
+<p>PicGo 使用手册：</p>
+<figure class="highlight tex"><table><tr><td class="code"><pre><span class="line">https://picgo.github.io/PicGo-Doc/zh/guide/</span><br></pre></td></tr></table></figure>
+
+<h2 id="2-2-配置Github图床"><a href="#2-2-配置Github图床" class="headerlink" title="2.2 配置Github图床"></a>2.2 配置Github图床</h2><p>我是用的 mac 电脑，第一次使用都不知道怎么打开 PicGo UI 界面，如下图，可以通过 mac 状态栏的“打开详细窗口”进到 UI 界面。</p>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/17/75ead9fc3b8c5119b805a2ab49713fe4-image-20211117004309731-551504.png" alt="image-20211117004309731"></p>
+<p>接下来就是如何通过 PicGo 配置 Github 图床，UI 中可以看到 PicGo 支持多种图床配置，这里我们选择配置 Github 图床。</p>
+<figure class="highlight tex"><table><tr><td class="code"><pre><span class="line"><span class="params">#</span> Github 图床配置</span><br><span class="line">设定仓库名（必须）：根据 1.1 小节创建的 Gihub 仓库地址自定义配置。</span><br><span class="line">设定分支名（必须）：main。Github 仓库默认的主分支就是 main，保持不变即可。</span><br><span class="line">设定Token（必须）：根据 1.2 小节创建的个人 Token 信息自定义修改。</span><br><span class="line">指定存储路径（非必须）：图片在仓库中的存储目录，默认是根目录存储所有图片。</span><br><span class="line">设定自定义域名（非必须）：免费的 cdn 访问加速工具，可配置上。格式为:https://cdn.jsdelivr.net/gh/&lt;用户名&gt;/&lt;仓库名&gt;，其实就是第一项信息。</span><br></pre></td></tr></table></figure>
+
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/17/7c51cb4df5ed344c6db7ac14756f9cf9-image-20211117004525265-f66ab5.png" alt="image-20211117004525265"></p>
+<h2 id="2-3-PicGo上传图片"><a href="#2-3-PicGo上传图片" class="headerlink" title="2.3 PicGo上传图片"></a>2.3 PicGo上传图片</h2><p>配置好 Github 图床后，我们可以通过 PicGo UI 界面上传图片到 Github 图床。PicGo 也提供了多种上传方式，我个人选择了两张方式做验证，上传成功后就可以取 Github 图床（其实就是往仓库里提交图片信息）中查看照片是否成功上传。</p>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/17/7da063c4cea021de4986d618f5484e27-image-20211117005551971-f2db47.png" alt="image-20211117005551971"></p>
+<h1 id="3-Typora配置PicGo上传"><a href="#3-Typora配置PicGo上传" class="headerlink" title="3. Typora配置PicGo上传"></a>3. Typora配置PicGo上传</h1><p>用 PicGo 上传图片后，我又遇到一个问题，我在本地编辑器中插入一张图片，我需要先将图片通过 PicGo 上传到 Github 图床，然后在本地编辑器中通过地址插入图片，还是特别不方便。</p>
+<h2 id="3-1-配置-PicGo"><a href="#3-1-配置-PicGo" class="headerlink" title="3.1 配置 PicGo"></a>3.1 配置 PicGo</h2><p>好在 Typora 提供了一个图片上传的服务配置，打开 Typora 工具 ”偏好设置 -&gt; 图像“，插入图片选项选择“无特殊操作”，然后在 “上传服务设定” 选项中，我们选择自定义上传命令。</p>
+<figure class="highlight tex"><table><tr><td class="code"><pre><span class="line">自定义上传命令：node picgo upload</span><br><span class="line"></span><br><span class="line">注意：</span><br><span class="line">node 命令是 nodeJs 环境，mac 下通过 brew install node 安装。</span><br><span class="line">picgo 命令是 PicGo 环境，mac 下通过 brew install npm; npm install picgo -g 安装。</span><br></pre></td></tr></table></figure>
+
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/17/c57ffd946f0653f8229eb9d16eafe67d-image-20211117010049415-2f137e.png" alt="image-20211117010049415"></p>
+<p>配置好命令后，点击”验证图片上传选项“，若上传成功则出现如下结果。</p>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/17/723961c0b72aef8de035e1da4e7b6014-image-20211117010148554-f22b03.png" alt="image-20211117010148554"></p>
+<h2 id="3-2-Typora上传图片"><a href="#3-2-Typora上传图片" class="headerlink" title="3.2 Typora上传图片"></a>3.2 Typora上传图片</h2><p>在文章开头也提过到效果，特别简单，两步操作即可完成：</p>
+<ol>
+<li>复制图片到 Typora 编辑器；</li>
+<li>选中图片右键“上传图片”。</li>
+</ol>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/17/87408aac9a9abc2ff76a132c622f6fb4-image-20211117001921095-621a7f.png" alt="image-20211117001921095"></p>
+]]></content>
+      <categories>
+        <category>tools</category>
+      </categories>
+      <tags>
+        <tag>工具使用</tag>
       </tags>
   </entry>
   <entry>
@@ -683,7 +734,7 @@
 <li><p>聚合上传到 HDFS 的日志也是有保留周期的，保存周期由 <code>yarn.log-aggregation.retain-seconds</code> 参数控制，集群可配置。</p>
 </li>
 </ol>
-<h1 id="3-聚合日志参数"><a href="#3-聚合日志参数" class="headerlink" title="3. 聚合日志参数"></a>3. 聚合日志参数</h1><figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">参数：yarn.nodemanager.log-dirs</span><br><span class="line">参数解释：日志存放地址（可配置多个目录）。</span><br><span class="line">默认值：$&#123;yarn.log.dir&#125;/userlogs</span><br><span class="line"></span><br><span class="line">参数：yarn.log-aggregation-enable</span><br><span class="line">参数解释：是否启用日志聚集功能。</span><br><span class="line">默认值：false</span><br><span class="line"></span><br><span class="line">参数：yarn.log-aggregation.retain-seconds</span><br><span class="line">参数解释：在HDFS上聚集的日志最多保存多长时间。</span><br><span class="line">默认值：-1</span><br><span class="line"></span><br><span class="line">参数：yarn.log-aggregation.retain-check-interval-seconds</span><br><span class="line">参数解释：多长时间检查一次日志，并将满足条件的删除，如果是0或者负数，则为上一个值的1/10。</span><br><span class="line">默认值：-1</span><br><span class="line"></span><br><span class="line">参数：yarn.nodemanager.remote-app-log-dir</span><br><span class="line">参数解释：当应用程序运行结束后，日志被转移到的HDFS目录（启用日志聚集功能时有效）。</span><br><span class="line">默认值：/tmp/logs</span><br><span class="line"></span><br><span class="line">参数：yarn.nodemanager.remote-app-log-dir-suffix</span><br><span class="line">参数解释：远程日志目录子目录名称（启用日志聚集功能时有效）。</span><br><span class="line">默认值：logs 日志将被转移到目录$&#123;yarn.nodemanager.remote-app-log-dir&#125;/$&#123;user&#125;/$&#123;thisParam&#125;下</span><br><span class="line"></span><br><span class="line">参数：yarn.nodemanager.log.retain-seconds</span><br><span class="line">参数解释：NodeManager上日志最多存放时间（不启用日志聚集功能时有效）。</span><br><span class="line">默认值：10800（3小时）</span><br></pre></td></tr></table></figure>
+<h1 id="3-聚合日志参数"><a href="#3-聚合日志参数" class="headerlink" title="3. 聚合日志参数"></a>3. 聚合日志参数</h1><figure class="highlight tex"><table><tr><td class="code"><pre><span class="line">参数：yarn.nodemanager.log-dirs</span><br><span class="line">参数解释：日志存放地址（可配置多个目录）。</span><br><span class="line">默认值：<span class="built_in">$</span>&#123;yarn.log.dir&#125;/userlogs</span><br><span class="line"></span><br><span class="line">参数：yarn.log-aggregation-enable</span><br><span class="line">参数解释：是否启用日志聚集功能。</span><br><span class="line">默认值：false</span><br><span class="line"></span><br><span class="line">参数：yarn.log-aggregation.retain-seconds</span><br><span class="line">参数解释：在HDFS上聚集的日志最多保存多长时间。</span><br><span class="line">默认值：-1</span><br><span class="line"></span><br><span class="line">参数：yarn.log-aggregation.retain-check-interval-seconds</span><br><span class="line">参数解释：多长时间检查一次日志，并将满足条件的删除，如果是0或者负数，则为上一个值的1/10。</span><br><span class="line">默认值：-1</span><br><span class="line"></span><br><span class="line">参数：yarn.nodemanager.remote-app-log-dir</span><br><span class="line">参数解释：当应用程序运行结束后，日志被转移到的HDFS目录（启用日志聚集功能时有效）。</span><br><span class="line">默认值：/tmp/logs</span><br><span class="line"></span><br><span class="line">参数：yarn.nodemanager.remote-app-log-dir-suffix</span><br><span class="line">参数解释：远程日志目录子目录名称（启用日志聚集功能时有效）。</span><br><span class="line">默认值：logs 日志将被转移到目录<span class="built_in">$</span>&#123;yarn.nodemanager.remote-app-log-dir&#125;/<span class="built_in">$</span>&#123;user&#125;/<span class="built_in">$</span>&#123;thisParam&#125;下</span><br><span class="line"></span><br><span class="line">参数：yarn.nodemanager.log.retain-seconds</span><br><span class="line">参数解释：NodeManager上日志最多存放时间（不启用日志聚集功能时有效）。</span><br><span class="line">默认值：10800（3小时）</span><br></pre></td></tr></table></figure>
 
 <h1 id="4-技术方案调研"><a href="#4-技术方案调研" class="headerlink" title="4. 技术方案调研"></a>4. 技术方案调研</h1><p><a href="https://mp.weixin.qq.com/s/0ffysIzzJIFLcyg2bXfwSQ">YARN 在字节跳动的优化与实践</a></p>
 <blockquote>
