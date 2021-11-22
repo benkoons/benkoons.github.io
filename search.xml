@@ -118,7 +118,7 @@
 <figure class="highlight tex"><table><tr><td class="code"><pre><span class="line">~~google.com~~</span><br></pre></td></tr></table></figure>
 
 <p>效果：</p>
-<p><del>delete baidu.com</del></p>
+<p><del>google.com</del></p>
 <h2 id="2-4-下划线"><a href="#2-4-下划线" class="headerlink" title="2.4 下划线"></a>2.4 下划线</h2><p>语法：</p>
 <figure class="highlight tex"><table><tr><td class="code"><pre><span class="line">&lt;u&gt;我是下划线&lt;/u&gt;</span><br></pre></td></tr></table></figure>
 
