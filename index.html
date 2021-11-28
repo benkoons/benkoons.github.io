@@ -249,6 +249,7 @@
       
           <blockquote>
 <p>源码版本：Apache Spark 2.4.7</p>
+<p>导读：网上看过一些介绍 Spark Listener 事件监听机制的介绍，大多都是从设计模式中的观察者模式介绍，Spark Listener 作为事件监听器，当有事件请求抵达时，监听器会发生变化，处理对应的事件请求。但在阅读过 YARN 源码 Dispatcher 设计（可以参考文章<a target="_blank" rel="noopener" href="https://benkoons.github.io/2021/11/28/YARN-Dispatcher%E8%AE%BE%E8%AE%A1%E6%80%9D%E6%83%B3%E5%8F%8A%E6%BA%90%E7%A0%81%E5%BC%95%E8%AF%BB/">YARN Dispatcher设计思想及源码引读</a>）后，发现 Spark Listener 的整体设计思想和 YARN 非常类似，都是采用经典的基于事件驱动的处理模型，也就是所谓的<code>生产者-消费者模型</code>，本文会参照 YARN Dispatcher 的设计思想，以 <code>Event -&gt; Dispatcher -&gt; EventHandler</code> 的事件流转流程介绍 Spark Listener 的具体实现。</p>
 </blockquote>
           <!--noindex-->
             <div class="post-button">
@@ -330,6 +331,7 @@
       
           <blockquote>
 <p>源码版本：Cloudera Hadoop 2.6.0-cdh5.14.4</p>
+<p>导读：Dispatcher 是 YARN 源码设计中使用场景比较多的一个接口，各种事件的状态流转都是通过 Dispatcher 转发的，理解了 YARN Dispatcher 的设计思想，才能更清晰地阅读 YARN 的源码。</p>
 </blockquote>
           <!--noindex-->
             <div class="post-button">
