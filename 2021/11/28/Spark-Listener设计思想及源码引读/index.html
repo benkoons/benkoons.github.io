@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=2">
+<meta name="theme-color" content="#222">
+<meta name="generator" content="Hexo 5.4.0">
+  <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon-next.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/images/favicon-32x32-next.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/favicon-16x16-next.png">
+  <link rel="mask-icon" href="/images/logo.svg" color="#222">
+
+<link rel="stylesheet" href="/css/main.css">
+
+<link rel="stylesheet" href="//fonts.googleapis.com/css?family=Lato:300,300italic,400,400italic,700,700italic&display=swap&subset=latin,latin-ext">
+<link rel="stylesheet" href="/lib/font-awesome/css/all.min.css">
+
+<script id="hexo-configurations">
+    var NexT = window.NexT || {};
+    var CONFIG = {"hostname":"yoursite.com","root":"/","scheme":"Pisces","version":"7.8.0","exturl":false,"sidebar":{"position":"left","display":"post","padding":18,"offset":12,"onmobile":false},"copycode":{"enable":true,"show_result":true,"style":"default"},"back2top":{"enable":true,"sidebar":false,"scrollpercent":false},"bookmark":{"enable":false,"color":"#222","save":"auto"},"fancybox":false,"mediumzoom":false,"lazyload":false,"pangu":false,"comments":{"style":"tabs","active":null,"storage":true,"lazyload":false,"nav":null},"algolia":{"hits":{"per_page":10},"labels":{"input_placeholder":"Search for Posts","hits_empty":"We didn't find any results for the search: ${query}","hits_stats":"${hits} results found in ${time} ms"}},"localsearch":{"enable":true,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false},"motion":{"enable":true,"async":false,"transition":{"post_block":"fadeIn","post_header":"slideDownIn","post_body":"slideDownIn","coll_header":"slideLeftIn","sidebar":"slideUpIn"}},"path":"search.xml"};
+  </script>
+
+  <meta name="description" content="源码版本：Apache Spark 2.4.7">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Spark Listener设计思想及源码引读">
+<meta property="og:url" content="http://yoursite.com/2021/11/28/Spark-Listener%E8%AE%BE%E8%AE%A1%E6%80%9D%E6%83%B3%E5%8F%8A%E6%BA%90%E7%A0%81%E5%BC%95%E8%AF%BB/index.html">
+<meta property="og:site_name" content="笨小康的博客">
+<meta property="og:description" content="源码版本：Apache Spark 2.4.7">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/28/e3ca4b2a6644c941bd6269f5026cb81d-1638101616428-c8329717-c941-43d5-8e6d-7ebbe3f832e5-ff7272.png">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/28/e3ca4b2a6644c941bd6269f5026cb81d-1638101616428-c8329717-c941-43d5-8e6d-7ebbe3f832e5-20211128204724899-9a9e93.png">
+<meta property="article:published_time" content="2021-11-28T12:42:30.000Z">
+<meta property="article:modified_time" content="2021-11-28T12:47:29.613Z">
+<meta property="article:author" content="笨小康">
+<meta property="article:tag" content="大数据">
+<meta property="article:tag" content="Spark">
+<meta property="article:tag" content="Spark源码">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/28/e3ca4b2a6644c941bd6269f5026cb81d-1638101616428-c8329717-c941-43d5-8e6d-7ebbe3f832e5-ff7272.png">
+
+<link rel="canonical" href="http://yoursite.com/2021/11/28/Spark-Listener%E8%AE%BE%E8%AE%A1%E6%80%9D%E6%83%B3%E5%8F%8A%E6%BA%90%E7%A0%81%E5%BC%95%E8%AF%BB/">
+
+
+<script id="page-configurations">
+  // https://hexo.io/docs/variables.html
+  CONFIG.page = {
+    sidebar: "",
+    isHome : false,
+    isPost : true,
+    lang   : 'zh-CN'
+  };
+</script>
+
+  <title>Spark Listener设计思想及源码引读 | 笨小康的博客</title>
+  
+
+
+
+
+
+
+  <noscript>
+  <style>
+  .use-motion .brand,
+  .use-motion .menu-item,
+  .sidebar-inner,
+  .use-motion .post-block,
+  .use-motion .pagination,
+  .use-motion .comments,
+  .use-motion .post-header,
+  .use-motion .post-body,
+  .use-motion .collection-header { opacity: initial; }
+
+  .use-motion .site-title,
+  .use-motion .site-subtitle {
+    opacity: initial;
+    top: initial;
+  }
+
+  .use-motion .logo-line-before i { left: initial; }
+  .use-motion .logo-line-after i { right: initial; }
+  </style>
+</noscript>
+
+</head>
+
+<body itemscope itemtype="http://schema.org/WebPage">
+  <div class="container use-motion">
+    <div class="headband"></div>
+
+    <header class="header" itemscope itemtype="http://schema.org/WPHeader">
+      <div class="header-inner"><div class="site-brand-container">
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="切换导航栏">
+      <span class="toggle-line toggle-line-first"></span>
+      <span class="toggle-line toggle-line-middle"></span>
+      <span class="toggle-line toggle-line-last"></span>
+    </div>
+  </div>
+
+  <div class="site-meta">
+
+    <a href="/" class="brand" rel="start">
+      <span class="logo-line-before"><i></i></span>
+      <h1 class="site-title">笨小康的博客</h1>
+      <span class="logo-line-after"><i></i></span>
+    </a>
+      <p class="site-subtitle" itemprop="description">星辰大海, 如期而至</p>
+  </div>
+
+  <div class="site-nav-right">
+    <div class="toggle popup-trigger">
+        <i class="fa fa-search fa-fw fa-lg"></i>
+    </div>
+  </div>
+</div>
+
+
+
+
+<nav class="site-nav">
+  <ul id="menu" class="main-menu menu">
+        <li class="menu-item menu-item-home">
+
+    <a href="/" rel="section"><i class="fa fa-home fa-fw"></i>首页</a>
+
+  </li>
+        <li class="menu-item menu-item-archives">
+
+    <a href="/archives/" rel="section"><i class="fa fa-archive fa-fw"></i>归档</a>
+
+  </li>
+        <li class="menu-item menu-item-categories">
+
+    <a href="/categories/" rel="section"><i class="fa fa-th fa-fw"></i>分类</a>
+
+  </li>
+        <li class="menu-item menu-item-tags">
+
+    <a href="/tags/" rel="section"><i class="fa fa-tags fa-fw"></i>标签云</a>
+
+  </li>
+        <li class="menu-item menu-item-photography">
+
+    <a href="/categories/photography/" rel="section"><i class="fa fa-camera fa-fw"></i>摄影集</a>
+
+  </li>
+        <li class="menu-item menu-item-flomo">
+
+    <a href="/categories/flomo/" rel="section"><i class="fa fa-lightbulb fa-fw"></i>随想录</a>
+
+  </li>
+        <li class="menu-item menu-item-about">
+
+    <a href="/about/" rel="section"><i class="fa fa-user fa-fw"></i>关于我</a>
+
+  </li>
+      <li class="menu-item menu-item-search">
+        <a role="button" class="popup-trigger"><i class="fa fa-search fa-fw"></i>搜文章
+        </a>
+      </li>
+  </ul>
+</nav>
+
+
+
+  <div class="search-pop-overlay">
+    <div class="popup search-popup">
+        <div class="search-header">
+  <span class="search-icon">
+    <i class="fa fa-search"></i>
+  </span>
+  <div class="search-input-container">
+    <input autocomplete="off" autocapitalize="off"
+           placeholder="搜索..." spellcheck="false"
+           type="search" class="search-input">
+  </div>
+  <span class="popup-btn-close">
+    <i class="fa fa-times-circle"></i>
+  </span>
+</div>
+<div id="search-result">
+  <div id="no-result">
+    <i class="fa fa-spinner fa-pulse fa-5x fa-fw"></i>
+  </div>
+</div>
+
+    </div>
+  </div>
+
+</div>
+    </header>
+
+    
+  <div class="back-to-top">
+    <i class="fa fa-arrow-up"></i>
+    <span>0%</span>
+  </div>
+  <div class="reading-progress-bar"></div>
+
+
+    <main class="main">
+      <div class="main-inner">
+        <div class="content-wrap">
+          
+
+          <div class="content post posts-expand">
+            
+
+    
+  
+  
+  <article itemscope itemtype="http://schema.org/Article" class="post-block" lang="zh-CN">
+    <link itemprop="mainEntityOfPage" href="http://yoursite.com/2021/11/28/Spark-Listener%E8%AE%BE%E8%AE%A1%E6%80%9D%E6%83%B3%E5%8F%8A%E6%BA%90%E7%A0%81%E5%BC%95%E8%AF%BB/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/images/avatar.gif">
+      <meta itemprop="name" content="笨小康">
+      <meta itemprop="description" content="">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="笨小康的博客">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          Spark Listener设计思想及源码引读
+        </h1>
+
+        <div class="post-meta">
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-calendar"></i>
+              </span>
+              <span class="post-meta-item-text">发表于</span>
+
+              <time title="创建时间：2021-11-28 20:42:30" itemprop="dateCreated datePublished" datetime="2021-11-28T20:42:30+08:00">2021-11-28</time>
+            </span>
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-folder"></i>
+              </span>
+              <span class="post-meta-item-text">分类于</span>
+                <span itemprop="about" itemscope itemtype="http://schema.org/Thing">
+                  <a href="/categories/Spark/" itemprop="url" rel="index"><span itemprop="name">Spark</span></a>
+                </span>
+            </span>
+
+          
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody">
+
+      
+        <blockquote>
+<p>源码版本：Apache Spark 2.4.7</p>
+</blockquote>
+<p>网上看过一些介绍 Spark Listener 事件监听机制的介绍，大多都是从设计模式中的观察者模式介绍，Spark Listener 作为事件监听器，当有事件请求抵达时，监听器会发生变化，处理对应的事件请求。但在阅读过 YARN 源码 Dispatcher 设计（可以参考文章<a target="_blank" rel="noopener" href="https://www.baidu.com/">YARN Dispatcher设计思想及源码引读</a>）后，发现 Spark Listener 的整体设计思想和 YARN 非常类似，都是采用经典的基于事件驱动的处理模型，也就是所谓的<code>生产者-消费者模型</code>，本文会参照 YARN Dispatcher 的设计思想，以 <code>Event -&gt; Dispatcher -&gt; EventHandler</code> 的事件流转流程介绍 Spark Listener 的具体实现。</p>
+<h1 id="1-Spark-Listener介绍"><a href="#1-Spark-Listener介绍" class="headerlink" title="1. Spark Listener介绍"></a>1. Spark Listener介绍</h1><p>Spark 和 YARN 都是基于事件驱动的处理模型，所以整体设计思想是一致的，包括：</p>
+<ul>
+<li><p>事件：各种请求的事件类型</p>
+</li>
+<li><p>事件转发器：根据请求的事件类型对事件进行转发，转发对应的事件处理器处理。</p>
+</li>
+<li><p>事件处理器：根据事件类型执行真正的事件处理逻辑。</p>
+</li>
+</ul>
+<p>不同于 YARN 的是，Spark 中的事件、事件转发器和事件处理器的命令并不一样，不过按照我自己的理解，两者也存在相应的对应关系：</p>
+<table>
+<thead>
+<tr>
+<th align="center"><strong>对比项</strong></th>
+<th align="center"><strong>YARN</strong></th>
+<th align="center"><strong>Spark</strong></th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="center"><strong>事件</strong></td>
+<td align="center">Event</td>
+<td align="center">Event</td>
+</tr>
+<tr>
+<td align="center"><strong>事件转发器</strong></td>
+<td align="center">Dispatcher</td>
+<td align="center">ListenerBus</td>
+</tr>
+<tr>
+<td align="center"><strong>事件处理器</strong></td>
+<td align="center">EventHandler</td>
+<td align="center">SparkListener</td>
+</tr>
+</tbody></table>
+<p>为理解各个组件在 Spark 源码中的继承关系，下面梳理了部分与事件处理模型相关的类和接口的继承关系，方便对 Spark Listener 源码架构有大概的理解。（这里并没有画 UML 继承图，主要是图方便，能理解不同类型的类的继承结构即可）</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#</span><span class="bash"> Event事件</span></span><br><span class="line">trait SparkListenerEvent</span><br><span class="line">case class SparkListenerJobStart extends SparkListenerEvent</span><br><span class="line">case class SparkListenerStageSubmitted extends SparkListenerEvent</span><br><span class="line">case class SparkListenerTaskStart extends SparkListenerEvent</span><br><span class="line"><span class="meta"></span></span><br><span class="line"><span class="meta"></span></span><br><span class="line"><span class="meta">#</span><span class="bash"> ListenerBus总线</span></span><br><span class="line">trait ListenerBus</span><br><span class="line">trait SparkListenerBus extends ListenerBus</span><br><span class="line">class AsyncEventQueue extends SparkListenerBus</span><br><span class="line">class ReplayListenerBus extends SparkListenerBus</span><br><span class="line"><span class="meta"></span></span><br><span class="line"><span class="meta"></span></span><br><span class="line"><span class="meta">#</span><span class="bash"> SparkListener事件监听器</span></span><br><span class="line">trait SparkListenerInterface</span><br><span class="line">abstract class SparkListener extends SparkListenerInterface</span><br><span class="line">		class EventLoggingListener extends SparkListener</span><br><span class="line">		class AppStatusListener extends SparkListener</span><br><span class="line">    class ExecutorAllocationListener extends SparkListener</span><br><span class="line">    class HeartbeatReceiver extends SparkListener</span><br><span class="line">class SparkFirehoseListener implements SparkListenerInterface</span><br><span class="line"><span class="meta"></span></span><br><span class="line"><span class="meta"></span></span><br><span class="line"><span class="meta">#</span><span class="bash"> DAGScheduler内部独立的生产者-消费者模型，和YARN的SchedulerEventDispatcher设计是一致的</span></span><br><span class="line">trait DAGSchedulerEvent</span><br><span class="line">case class JobSubmitted extends DAGSchedulerEvent</span><br><span class="line">case class MapStageSubmitted extends DAGSchedulerEvent</span><br><span class="line"></span><br><span class="line">private[scheduler] class DAGSchedulerEventProcessLoop(dagScheduler: DAGScheduler)</span><br><span class="line">  extends EventLoop[DAGSchedulerEvent](&quot;dag-scheduler-event-loop&quot;)</span><br></pre></td></tr></table></figure>
+
+<h1 id="2-Spark-Listener设计原理"><a href="#2-Spark-Listener设计原理" class="headerlink" title="2. Spark Listener设计原理"></a>2. Spark Listener设计原理</h1><h2 id="2-1-ListenerBus总览"><a href="#2-1-ListenerBus总览" class="headerlink" title="2.1 ListenerBus总览"></a>2.1 ListenerBus总览</h2><p>从上面 ListenerBus 的类继承关系，发现 SparkListenerBus 只有 AsyncEventQueue 和 ReplayListenerBus 两类总线，ReplayListenerBus 总线功能比较单一，主要是用于 SparkHistoryServer 服务回放解析 eventlog 日志，而 AsyncEventQueue 总线才是 SparkListenerBus 的核心总线，担负起 Spark 中所有 SparkListener 事件的分发。</p>
+<p>AsyncEventQueue 总线在 Spark 中包括四类，总线的名字如下。可以看到四类总线的定义是在 LiveListenerBus 类中， LiveListenerBus 看名字容易误解，其实它不是 Spark 的一种 ListenerBus，是以独立的类存在，但它的作用非常重要，负责管理和分发 SparkListener 事件到四种总线，</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/LiveListenerBus.scala</span></span><br><span class="line"><span class="keyword">private</span>[spark] <span class="class"><span class="keyword">object</span> <span class="title">LiveListenerBus</span> </span>&#123;</span><br><span class="line"></span><br><span class="line">  <span class="keyword">private</span>[scheduler] <span class="keyword">val</span> <span class="type">SHARED_QUEUE</span> = <span class="string">&quot;shared&quot;</span></span><br><span class="line"></span><br><span class="line">  <span class="keyword">private</span>[scheduler] <span class="keyword">val</span> <span class="type">APP_STATUS_QUEUE</span> = <span class="string">&quot;appStatus&quot;</span></span><br><span class="line"></span><br><span class="line">  <span class="keyword">private</span>[scheduler] <span class="keyword">val</span> <span class="type">EXECUTOR_MANAGEMENT_QUEUE</span> = <span class="string">&quot;executorManagement&quot;</span></span><br><span class="line"></span><br><span class="line">  <span class="keyword">private</span>[scheduler] <span class="keyword">val</span> <span class="type">EVENT_LOG_QUEUE</span> = <span class="string">&quot;eventLog&quot;</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>那四类总线是如何创建的呢？LiveListenerBus 定义了四种总线对应的 addToQueue 方法，在对应 AsyncEventQueue 总线没有被创建时，就会创建一个总线，并添加到总线集合 queues。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/LiveListenerBus.scala</span></span><br><span class="line">  <span class="comment">/** Add a listener to queue shared by all non-internal listeners. */</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">addToSharedQueue</span></span>(listener: <span class="type">SparkListenerInterface</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">    addToQueue(listener, <span class="type">SHARED_QUEUE</span>)</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="comment">/** Add a listener to the executor management queue. */</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">addToManagementQueue</span></span>(listener: <span class="type">SparkListenerInterface</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">    addToQueue(listener, <span class="type">EXECUTOR_MANAGEMENT_QUEUE</span>)</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="comment">/** Add a listener to the application status queue. */</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">addToStatusQueue</span></span>(listener: <span class="type">SparkListenerInterface</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">    addToQueue(listener, <span class="type">APP_STATUS_QUEUE</span>)</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="comment">/** Add a listener to the event log queue. */</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">addToEventLogQueue</span></span>(listener: <span class="type">SparkListenerInterface</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">    addToQueue(listener, <span class="type">EVENT_LOG_QUEUE</span>)</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="comment">/**</span></span><br><span class="line"><span class="comment">   * Add a listener to a specific queue, creating a new queue if needed. Queues are independent</span></span><br><span class="line"><span class="comment">   * of each other (each one uses a separate thread for delivering events), allowing slower</span></span><br><span class="line"><span class="comment">   * listeners to be somewhat isolated from others.</span></span><br><span class="line"><span class="comment">   */</span></span><br><span class="line">  <span class="keyword">private</span>[spark] <span class="function"><span class="keyword">def</span> <span class="title">addToQueue</span></span>(</span><br><span class="line">      listener: <span class="type">SparkListenerInterface</span>,</span><br><span class="line">      queue: <span class="type">String</span>): <span class="type">Unit</span> = synchronized &#123;</span><br><span class="line">    <span class="keyword">if</span> (stopped.get()) &#123;</span><br><span class="line">      <span class="keyword">throw</span> <span class="keyword">new</span> <span class="type">IllegalStateException</span>(<span class="string">&quot;LiveListenerBus is stopped.&quot;</span>)</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 判断 queues 集合中是否已经存在对应的 queue 总线（queue 表示 AsyncEventQueue 总线）</span></span><br><span class="line">    queues.asScala.find(_.name == queue) <span class="keyword">match</span> &#123;</span><br><span class="line">      <span class="keyword">case</span> <span class="type">Some</span>(queue) =&gt;</span><br><span class="line">        queue.addListener(listener)</span><br><span class="line"></span><br><span class="line">      <span class="keyword">case</span> <span class="type">None</span> =&gt;</span><br><span class="line">        <span class="comment">// 根据 queue 名字创建对应的总线，AsyncEventQueue 就是这个总线</span></span><br><span class="line">        <span class="keyword">val</span> newQueue = <span class="keyword">new</span> <span class="type">AsyncEventQueue</span>(queue, conf, metrics, <span class="keyword">this</span>)</span><br><span class="line">        newQueue.addListener(listener)</span><br><span class="line">        <span class="keyword">if</span> (started.get()) &#123;</span><br><span class="line">          newQueue.start(sparkContext)</span><br><span class="line">        &#125;</span><br><span class="line">        queues.add(newQueue)</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="2-2-SparkListener注册逻辑"><a href="#2-2-SparkListener注册逻辑" class="headerlink" title="2.2 SparkListener注册逻辑"></a>2.2 SparkListener注册逻辑</h2><p>我们知道 YARN 中 Dispatcher 注册对象是 <code>EventType -&gt; EventHandler</code> 的映射关系，而 Spark 设计思想里是以 Listener 对象作为注册对象，将不同的 SparkListener 对象注册是对应的总线上。我们还是以上面的四种总线为例，看看 SparkListener 是如何添加到不同的总线上。</p>
+<h3 id="2-2-1-注册到Shared总线"><a href="#2-2-1-注册到Shared总线" class="headerlink" title="2.2.1 注册到Shared总线"></a>2.2.1 注册到Shared总线</h3><p>addToSharedQueue 方式是 SparkListener 注册到 Shared-AsyncEventQueue 总线的入口。</p>
+<ul>
+<li><strong>自定义扩展 SparkListener 注册。</strong></li>
+</ul>
+<p>Shared-AsyncEventQueue 总线在 Spark 中默认是没有注册任何 SparkListener 的，主要是用于外部自定义扩展的 SparkListener 注册，可以扩展多个 SparkListener。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/SparkContext.scala</span></span><br><span class="line">  <span class="keyword">private</span> <span class="function"><span class="keyword">def</span> <span class="title">setupAndStartListenerBus</span></span>(): <span class="type">Unit</span> = &#123;</span><br><span class="line">    conf.get(<span class="type">EXTRA_LISTENERS</span>).foreach &#123; classNames =&gt;</span><br><span class="line">      <span class="comment">// 根据类名加载外部扩展的 SparkListener</span></span><br><span class="line">      <span class="keyword">val</span> listeners = <span class="type">Utils</span>.loadExtensions(classOf[<span class="type">SparkListenerInterface</span>], classNames, conf)</span><br><span class="line">      <span class="comment">// 将 SparkListener 添加到 Shared-AsyncEventQueue 总线上</span></span><br><span class="line">      listeners.foreach &#123; listener =&gt;</span><br><span class="line">        listenerBus.addToSharedQueue(listener)</span><br><span class="line">        logInfo(<span class="string">s&quot;Registered listener <span class="subst">$&#123;listener.getClass().getName()&#125;</span>&quot;</span>)</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="comment">// An asynchronous listener bus for Spark events</span></span><br><span class="line">  <span class="keyword">private</span>[spark] <span class="function"><span class="keyword">def</span> <span class="title">listenerBus</span></span>: <span class="type">LiveListenerBus</span> = _listenerBus</span><br></pre></td></tr></table></figure>
+
+<p>addToQueue() 方法内部的 <code>queue.addListener(listener)</code> 操作是真正将具体 SparkListener 关联到对应 SparkListenerBus 上。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/LiveListenerBus.scala</span></span><br><span class="line">  <span class="comment">/** Add a listener to queue shared by all non-internal listeners. */</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">addToSharedQueue</span></span>(listener: <span class="type">SparkListenerInterface</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">    addToQueue(listener, <span class="type">SHARED_QUEUE</span>)</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="keyword">private</span>[spark] <span class="function"><span class="keyword">def</span> <span class="title">addToQueue</span></span>(</span><br><span class="line">      listener: <span class="type">SparkListenerInterface</span>,</span><br><span class="line">      queue: <span class="type">String</span>): <span class="type">Unit</span> = synchronized &#123;</span><br><span class="line">    <span class="keyword">if</span> (stopped.get()) &#123;</span><br><span class="line">      <span class="keyword">throw</span> <span class="keyword">new</span> <span class="type">IllegalStateException</span>(<span class="string">&quot;LiveListenerBus is stopped.&quot;</span>)</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 判断 queues 集合中是否存在名字为 queue 的总线（queue 表示 AsyncEventQueue 总线）</span></span><br><span class="line">    queues.asScala.find(_.name == queue) <span class="keyword">match</span> &#123;</span><br><span class="line">      <span class="comment">// 如果 queue 总线存在，则直接将 SparkListener 添加到该总线上</span></span><br><span class="line">      <span class="keyword">case</span> <span class="type">Some</span>(queue) =&gt;</span><br><span class="line">        queue.addListener(listener)</span><br><span class="line"></span><br><span class="line">      <span class="comment">// 如果 queue 总线不存在，则创建对应的 queue 总线，并将 SparkListener 添加到总线上</span></span><br><span class="line">      <span class="keyword">case</span> <span class="type">None</span> =&gt;</span><br><span class="line">        <span class="comment">// 根据 queue 名字创建对应的总线，AsyncEventQueue 就是这个总线</span></span><br><span class="line">        <span class="keyword">val</span> newQueue = <span class="keyword">new</span> <span class="type">AsyncEventQueue</span>(queue, conf, metrics, <span class="keyword">this</span>)</span><br><span class="line">        newQueue.addListener(listener)</span><br><span class="line">        <span class="keyword">if</span> (started.get()) &#123;</span><br><span class="line">          newQueue.start(sparkContext)</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="comment">// 四个总线的集合</span></span><br><span class="line">        queues.add(newQueue)</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="2-2-2-注册到ExecutorManagement总线"><a href="#2-2-2-注册到ExecutorManagement总线" class="headerlink" title="2.2.2 注册到ExecutorManagement总线"></a>2.2.2 注册到ExecutorManagement总线</h3><p>addToManagementQueue 方式是 SparkListener 注册到 ExecutorManagement-AsyncEventQueue 总线的入口。</p>
+<ul>
+<li><strong>ExecutorAllocationListener 注册。</strong></li>
+</ul>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/ExecutorAllocationManager.scala</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">start</span></span>(): <span class="type">Unit</span> = &#123;</span><br><span class="line">    listenerBus.addToManagementQueue(listener)</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="comment">// listener定义</span></span><br><span class="line">  <span class="keyword">val</span> listener = <span class="keyword">new</span> <span class="type">ExecutorAllocationListener</span></span><br></pre></td></tr></table></figure>
+
+<ul>
+<li><strong>HeartbeatReceiver 注册。</strong></li>
+</ul>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/HeartbeatReceiver.scala</span></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * Lives in the driver to receive heartbeats from executors..</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="keyword">private</span>[spark] <span class="class"><span class="keyword">class</span> <span class="title">HeartbeatReceiver</span>(<span class="params">sc: <span class="type">SparkContext</span>, clock: <span class="type">Clock</span></span>)</span></span><br><span class="line">  <span class="keyword">extends</span> <span class="type">SparkListener</span> <span class="keyword">with</span> <span class="type">ThreadSafeRpcEndpoint</span> <span class="keyword">with</span> <span class="type">Logging</span> &#123;</span><br><span class="line">  ...</span><br><span class="line">  <span class="comment">// this 表示 HeartbeatReceiver 类，也是一个 SparkListener</span></span><br><span class="line">  sc.listenerBus.addToManagementQueue(<span class="keyword">this</span>)</span><br><span class="line">  ...</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="2-2-3-注册到AppStatus总线"><a href="#2-2-3-注册到AppStatus总线" class="headerlink" title="2.2.3 注册到AppStatus总线"></a>2.2.3 注册到AppStatus总线</h3><p>addToStatusQueue 方式是 SparkListener 注册到 AppStatus-AsyncEventQueue 总线的入口。</p>
+<ul>
+<li><strong>AppStatusListener 注册。</strong></li>
+</ul>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/SparkContext.scala</span></span><br><span class="line">    <span class="comment">// Initialize the app status store and listener before SparkEnv is created so that it gets all events.</span></span><br><span class="line">    <span class="comment">// _statusStore.listener 为 AppStatusListener</span></span><br><span class="line">    _statusStore = <span class="type">AppStatusStore</span>.createLiveStore(conf)</span><br><span class="line">    listenerBus.addToStatusQueue(_statusStore.listener.get)</span><br><span class="line"></span><br><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/status/AppStatusStore.scala</span></span><br><span class="line">	<span class="keyword">private</span>[spark] <span class="class"><span class="keyword">class</span> <span class="title">AppStatusStore</span>(<span class="params"></span></span></span><br><span class="line"><span class="params"><span class="class">    val store: <span class="type">KVStore</span>,</span></span></span><br><span class="line"><span class="params"><span class="class">    val listener: <span class="type">Option</span>[<span class="type">AppStatusListener</span>] = <span class="type">None</span></span>)</span></span><br></pre></td></tr></table></figure>
+
+<ul>
+<li><strong>BarrierCoordinator 内部 SparkListener 注册。</strong></li>
+</ul>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/BarrierCoordinator.scala</span></span><br><span class="line">  <span class="keyword">override</span> <span class="function"><span class="keyword">def</span> <span class="title">onStart</span></span>(): <span class="type">Unit</span> = &#123;</span><br><span class="line">    <span class="keyword">super</span>.onStart()</span><br><span class="line">    listenerBus.addToStatusQueue(listener)</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="comment">// 内部直接创建一个 SparkListener</span></span><br><span class="line">  <span class="comment">// Listen to StageCompleted event, clear corresponding ContextBarrierState.</span></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">val</span> listener = <span class="keyword">new</span> <span class="type">SparkListener</span> &#123;</span><br><span class="line">    <span class="keyword">override</span> <span class="function"><span class="keyword">def</span> <span class="title">onStageCompleted</span></span>(stageCompleted: <span class="type">SparkListenerStageCompleted</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">      <span class="keyword">val</span> stageInfo = stageCompleted.stageInfo</span><br><span class="line">      <span class="keyword">val</span> barrierId = <span class="type">ContextBarrierId</span>(stageInfo.stageId, stageInfo.attemptNumber)</span><br><span class="line">      <span class="comment">// Clear ContextBarrierState from a finished stage attempt.</span></span><br><span class="line">      cleanupBarrierStage(barrierId)</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="2-2-4-注册到EventLog总线"><a href="#2-2-4-注册到EventLog总线" class="headerlink" title="2.2.4 注册到EventLog总线"></a>2.2.4 注册到EventLog总线</h3><p>addToEventLogQueue 方式是 SparkListener 注册到 EventLog-AsyncEventQueue 总线的入口。</p>
+<ul>
+<li><strong>EventLoggingListener 注册。</strong></li>
+</ul>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/SparkContext.scala</span></span><br><span class="line">    _eventLogger =</span><br><span class="line">      <span class="keyword">if</span> (isEventLogEnabled) &#123;</span><br><span class="line">        <span class="keyword">val</span> logger =</span><br><span class="line">          <span class="keyword">new</span> <span class="type">EventLoggingListener</span>(_applicationId, _applicationAttemptId, _eventLogDir.get,</span><br><span class="line">            _conf, _hadoopConfiguration)</span><br><span class="line">        logger.start()</span><br><span class="line">        listenerBus.addToEventLogQueue(logger)</span><br><span class="line">        <span class="type">Some</span>(logger)</span><br><span class="line">      &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        <span class="type">None</span></span><br><span class="line">      &#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="2-3-Event处理逻辑"><a href="#2-3-Event处理逻辑" class="headerlink" title="2.3 Event处理逻辑"></a>2.3 Event处理逻辑</h2><p>Spark 的事件处理模型也是经典的<code>生产者-消费者模型</code>，对于 Event 的处理逻辑需要找到起对应的生产者和消费者。Spark 中有两大类 Event，一类是 SparkListenerEvent，作用域贯穿整个 SparkListener，一类是 DAGSchedulerEvent，作用域为 DAGScheduer 类。</p>
+<h3 id="2-3-1-DAGSchedulerEvent处理逻辑"><a href="#2-3-1-DAGSchedulerEvent处理逻辑" class="headerlink" title="2.3.1 DAGSchedulerEvent处理逻辑"></a>2.3.1 DAGSchedulerEvent处理逻辑</h3><p>DAGSchedulerEvent 事件的处理逻辑基本都是通过 <code>eventProcessLoop.post(event)</code> 方式发送事件。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/DAGScheduler.scala</span></span><br><span class="line">	<span class="comment">// DAGSchedulerEvent 的提交方式，以 JobSubmitted 事件为例。</span></span><br><span class="line">	eventProcessLoop.post(<span class="type">JobSubmitted</span>())</span><br><span class="line"></span><br><span class="line">  <span class="comment">// eventProcessLoop 是一个 EventLoop 类</span></span><br><span class="line">  <span class="keyword">private</span>[spark] <span class="keyword">val</span> eventProcessLoop = <span class="keyword">new</span> <span class="type">DAGSchedulerEventProcessLoop</span>(<span class="keyword">this</span>)</span><br><span class="line"></span><br><span class="line">  <span class="keyword">private</span>[scheduler] <span class="class"><span class="keyword">class</span> <span class="title">DAGSchedulerEventProcessLoop</span>(<span class="params">dagScheduler: <span class="type">DAGScheduler</span></span>)</span></span><br><span class="line">    <span class="keyword">extends</span> <span class="type">EventLoop</span>[<span class="type">DAGSchedulerEvent</span>](<span class="string">&quot;dag-scheduler-event-loop&quot;</span>)</span><br></pre></td></tr></table></figure>
+
+<p>eventProcessLoop 是 EventLoop 类的唯一子类，eventProcessLoop 内部没有实现 post() 方法，直接调用 EventLoop 父类将事件添加到 eventQueue 阻塞队列中，此时事件生产过程已经结束。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/util/EventLoop.scala</span></span><br><span class="line">  <span class="comment">/**</span></span><br><span class="line"><span class="comment">   * Put the event into the event queue. The event thread will process it later.</span></span><br><span class="line"><span class="comment">   */</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">post</span></span>(event: <span class="type">E</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">    <span class="comment">// 阻塞队列添加事件</span></span><br><span class="line">    eventQueue.put(event)</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">val</span> eventQueue: <span class="type">BlockingQueue</span>[<span class="type">E</span>] = <span class="keyword">new</span> <span class="type">LinkedBlockingDeque</span>[<span class="type">E</span>]()</span><br></pre></td></tr></table></figure>
+
+<p>那消费者是如何来消费生产者生产的事件呢？在 DAGScheduler 初始化时有一段非常关键的代码。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/DAGScheduler.scala</span></span><br><span class="line">  eventProcessLoop.start()</span><br></pre></td></tr></table></figure>
+
+<p>eventProcessLoop.start() 调用了 EventLoop 类的 start 方法，start() 方法内部启动一个 eventThread 独立线程，独立线程的作用就是死循环地消费前面 post 的 event 事件。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/util/EventLoop.scala</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">start</span></span>(): <span class="type">Unit</span> = &#123;</span><br><span class="line">    <span class="keyword">if</span> (stopped.get) &#123;</span><br><span class="line">      <span class="keyword">throw</span> <span class="keyword">new</span> <span class="type">IllegalStateException</span>(name + <span class="string">&quot; has already been stopped&quot;</span>)</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="comment">// Call onStart before starting the event thread to make sure it happens before onReceive</span></span><br><span class="line">    onStart()</span><br><span class="line">    <span class="comment">// start() 方法内部启动一个 eventThread 独立线程</span></span><br><span class="line">    eventThread.start()</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="keyword">private</span>[spark] <span class="keyword">val</span> eventThread = <span class="keyword">new</span> <span class="type">Thread</span>(name) &#123;</span><br><span class="line">    setDaemon(<span class="literal">true</span>)</span><br><span class="line"></span><br><span class="line">    <span class="keyword">override</span> <span class="function"><span class="keyword">def</span> <span class="title">run</span></span>(): <span class="type">Unit</span> = &#123;</span><br><span class="line">      <span class="keyword">try</span> &#123;</span><br><span class="line">        <span class="keyword">while</span> (!stopped.get) &#123;</span><br><span class="line">          <span class="comment">// 关键：从阻塞队列 eventQueue 中取出事件</span></span><br><span class="line">          <span class="keyword">val</span> event = eventQueue.take()</span><br><span class="line">          <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="comment">// 关键：具体处理事件的逻辑</span></span><br><span class="line">            onReceive(event)</span><br><span class="line">          &#125; <span class="keyword">catch</span> &#123;</span><br><span class="line">            <span class="keyword">case</span> <span class="type">NonFatal</span>(e) =&gt;</span><br><span class="line">              <span class="keyword">try</span> &#123;</span><br><span class="line">                onError(e)</span><br><span class="line">              &#125; <span class="keyword">catch</span> &#123;</span><br><span class="line">                <span class="keyword">case</span> <span class="type">NonFatal</span>(e) =&gt; logError(<span class="string">&quot;Unexpected error in &quot;</span> + name, e)</span><br><span class="line">              &#125;</span><br><span class="line">          &#125;</span><br><span class="line">        &#125;</span><br><span class="line">      &#125; <span class="keyword">catch</span> &#123;</span><br><span class="line">        <span class="keyword">case</span> ie: <span class="type">InterruptedException</span> =&gt; <span class="comment">// exit even if eventQueue is not empty</span></span><br><span class="line">        <span class="keyword">case</span> <span class="type">NonFatal</span>(e) =&gt; logError(<span class="string">&quot;Unexpected error in &quot;</span> + name, e)</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>具体 evnet 的处理逻辑交给 onReceive(event) 方法，由于 EventLoop 内部没有实现该方法，并且只有一个子类 DAGSchedulerEventProcessLoop，那该类一定实现了对应的方法。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/DAGScheduler.scala</span></span><br><span class="line"><span class="comment">// 内部类：DAGSchedulerEventProcessLoop</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">// EventLoop 子类实现的 onReceive 方法</span></span><br><span class="line">  <span class="keyword">override</span> <span class="function"><span class="keyword">def</span> <span class="title">onReceive</span></span>(event: <span class="type">DAGSchedulerEvent</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">    <span class="keyword">val</span> timerContext = timer.time()</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">      doOnReceive(event)</span><br><span class="line">    &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">      timerContext.stop()</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="comment">// 根据 DAGSchedulerEvent 事件类型执行想要逻辑</span></span><br><span class="line">  <span class="keyword">private</span> <span class="function"><span class="keyword">def</span> <span class="title">doOnReceive</span></span>(event: <span class="type">DAGSchedulerEvent</span>): <span class="type">Unit</span> = event <span class="keyword">match</span> &#123;</span><br><span class="line">    <span class="keyword">case</span> <span class="type">JobSubmitted</span>(jobId, rdd, func, partitions, callSite, listener, properties) =&gt;</span><br><span class="line">      dagScheduler.handleJobSubmitted(jobId, rdd, func, partitions, callSite, listener, properties)</span><br><span class="line"></span><br><span class="line">    <span class="keyword">case</span> <span class="type">MapStageSubmitted</span>(jobId, dependency, callSite, listener, properties) =&gt;</span><br><span class="line">      dagScheduler.handleMapStageSubmitted(jobId, dependency, callSite, listener, properties)</span><br><span class="line">    ...</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>至此，DAGSchedulerEvent 事件的生产消费处理逻辑就介绍结束。</p>
+<h3 id="2-3-2-SparkListenerEvent处理逻辑"><a href="#2-3-2-SparkListenerEvent处理逻辑" class="headerlink" title="2.3.2 SparkListenerEvent处理逻辑"></a>2.3.2 SparkListenerEvent处理逻辑</h3><p>SparkListenerEvent 贯穿 SparkListener 整个脉络，是 Spark 中非常重要的事件类型。它的实现于 DAGSchedulerEvent 实现方式不太一样，<strong>DAGSchedulerEvent 事件是一对一的调用，即一个事件交由一个 EventLoop 处理，而 SparkListenerEvent 事件是一对多的调用，即一个事件交由多个事件总线的多个 事件处理器处理。</strong>如下图，介绍了 SparkListenerEvent 事件的来源、LiveListenerBus 转发事件到四类事件总线，每类事件总线又将事件分发给总线上的所有 SparkListener，SparkListener 的注册逻辑在 2.2 小节中有介绍。</p>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/28/e3ca4b2a6644c941bd6269f5026cb81d-1638101616428-c8329717-c941-43d5-8e6d-7ebbe3f832e5-ff7272.png" alt="img"></p>
+<center>SparkListenerBus 工作流程图</center>
+
+<p>前面提到 LiveListenerBus 类作为管理 SparkListenerBus 总线和分配事件到总线的枢纽，SparkListenerEvent 的生产当然绕不开它的存在。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/DAGScheduler.scala</span></span><br><span class="line"> <span class="keyword">private</span>[scheduler] <span class="function"><span class="keyword">def</span> <span class="title">handleJobSubmitted</span></span>(jobId: <span class="type">Int</span>,</span><br><span class="line">     finalRDD: <span class="type">RDD</span>[_],</span><br><span class="line">     func: (<span class="type">TaskContext</span>, <span class="type">Iterator</span>[_]) =&gt; _,</span><br><span class="line">     partitions: <span class="type">Array</span>[<span class="type">Int</span>],</span><br><span class="line">     callSite: <span class="type">CallSite</span>,</span><br><span class="line">     listener: <span class="type">JobListener</span>,</span><br><span class="line">     properties: <span class="type">Properties</span>) &#123;</span><br><span class="line">   ...</span><br><span class="line">   <span class="comment">// SparkListenerEvent 事件的生产，以 SparkListenerJobStart 事件为例</span></span><br><span class="line">   listenerBus.post(</span><br><span class="line">     <span class="type">SparkListenerJobStart</span>(job.jobId, jobSubmissionTime, stageInfos, properties))</span><br><span class="line">   submitStage(finalStage)</span><br><span class="line"> &#125;   </span><br><span class="line"></span><br><span class="line"><span class="keyword">private</span>[spark] <span class="class"><span class="keyword">class</span> <span class="title">DAGScheduler</span>(<span class="params"></span></span></span><br><span class="line"><span class="params"><span class="class">   private[scheduler] val sc: <span class="type">SparkContext</span>,</span></span></span><br><span class="line"><span class="params"><span class="class">   private[scheduler] val taskScheduler: <span class="type">TaskScheduler</span>,</span></span></span><br><span class="line"><span class="params"><span class="class">   // listenerBus 属于 <span class="type">LiveListenerBus</span></span></span></span><br><span class="line"><span class="params"><span class="class">   listenerBus: <span class="type">LiveListenerBus</span>,</span></span></span><br><span class="line"><span class="params"><span class="class">   ...</span></span></span><br><span class="line"><span class="params"><span class="class">   &#125;</span></span></span><br></pre></td></tr></table></figure>
+
+<p>经过 LiveListenerBus#post 事件后，这里和之前的事件生产逻辑不太一样，它并不是将事件添加到一个 EventQueue 中，而是通过 postToQueues() 方法向 queues 数组中分别 post 该事件。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/LiveListenerBus.scala</span></span><br><span class="line">  <span class="comment">/** Post an event to all queues. */</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">post</span></span>(event: <span class="type">SparkListenerEvent</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">    <span class="keyword">if</span> (stopped.get()) &#123;</span><br><span class="line">      <span class="keyword">return</span></span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    metrics.numEventsPosted.inc()</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 判断 event buffer 数组是否为空，大多数情况都是调用这里发送事件</span></span><br><span class="line">    <span class="keyword">if</span> (queuedEvents == <span class="literal">null</span>) &#123;</span><br><span class="line">      postToQueues(event)</span><br><span class="line">      <span class="keyword">return</span></span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">		<span class="comment">// 判读LiveListenerBus 是否已经启动</span></span><br><span class="line">    synchronized &#123;</span><br><span class="line">      <span class="keyword">if</span> (!started.get()) &#123;</span><br><span class="line">        queuedEvents += event</span><br><span class="line">        <span class="keyword">return</span></span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// If the bus was already started when the check above was made, just post directly to the</span></span><br><span class="line">    <span class="comment">// queues.</span></span><br><span class="line">    postToQueues(event)</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>postToQueues 方法是和之前生产消费模型不同的关键，添加了一个中间阶段，postToQueues 方法收到事件后将其分别发送给 queues 队列中存放的四类事件总线。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/LiveListenerBus.scala</span></span><br><span class="line">  <span class="keyword">private</span> <span class="function"><span class="keyword">def</span> <span class="title">postToQueues</span></span>(event: <span class="type">SparkListenerEvent</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">    <span class="keyword">val</span> it = queues.iterator()</span><br><span class="line">    <span class="comment">// 关键：向 queues 中的四类事件总线分别发送 event 事件</span></span><br><span class="line">    <span class="keyword">while</span> (it.hasNext()) &#123;</span><br><span class="line">      it.next().post(event)</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 关键数据结构，存放前面介绍的四类事件总线，线程安全的 ArrayList 集合。</span></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">val</span> queues = <span class="keyword">new</span> <span class="type">CopyOnWriteArrayList</span>[<span class="type">AsyncEventQueue</span>]()</span><br></pre></td></tr></table></figure>
+
+<p>将事件分别发送给 queues 的各种事件总线时，在此时又看到了熟悉生产消费模型，将事件添加到容量有限的阻塞队列中。</p>
+<blockquote>
+<p>留一个问题思考：</p>
+<ul>
+<li>为什么在处理 DAGSchedulerEvent 时的阻塞队列是无限容量的，而这里处理 SparkListenerEvent 的阻塞队列要设计成有限容量？</li>
+</ul>
+</blockquote>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/AsyncEventQueue.scala</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">post</span></span>(event: <span class="type">SparkListenerEvent</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">    eventCount.incrementAndGet()</span><br><span class="line">    <span class="comment">// 关键：将事件添加到容量有限的阻塞队列中</span></span><br><span class="line">    <span class="keyword">if</span> (eventQueue.offer(event)) &#123;</span><br><span class="line">      <span class="keyword">return</span></span><br><span class="line">    &#125;</span><br><span class="line">    ...</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="comment">// 容量有限的阻塞队列</span></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">val</span> eventQueue = <span class="keyword">new</span> <span class="type">LinkedBlockingQueue</span>[<span class="type">SparkListenerEvent</span>](</span><br><span class="line">    conf.get(<span class="type">LISTENER_BUS_EVENT_QUEUE_CAPACITY</span>))</span><br></pre></td></tr></table></figure>
+
+<p>同样的，生产者为四类四类事件总线分别生产了同一个事件，那四类事件总线又是如何把这些事件转发到对应的 SparkListener 处理呢？在 AsyncEventQueue 启动时，会启动一个独立的异步线程，用于将接收的事件转发到对应的 SparkListener 处理。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/AsyncEventQueue.scala</span></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">val</span> dispatchThread = <span class="keyword">new</span> <span class="type">Thread</span>(<span class="string">s&quot;spark-listener-group-<span class="subst">$name</span>&quot;</span>) &#123;</span><br><span class="line">    setDaemon(<span class="literal">true</span>)</span><br><span class="line">    <span class="keyword">override</span> <span class="function"><span class="keyword">def</span> <span class="title">run</span></span>(): <span class="type">Unit</span> = <span class="type">Utils</span>.tryOrStopSparkContext(sc) &#123;</span><br><span class="line">      <span class="comment">// 四类事件总线都有这样的异步独立线程去转发接收到的事件</span></span><br><span class="line">      dispatch()</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="keyword">private</span> <span class="function"><span class="keyword">def</span> <span class="title">dispatch</span></span>(): <span class="type">Unit</span> = <span class="type">LiveListenerBus</span>.withinListenerThread.withValue(<span class="literal">true</span>) &#123;</span><br><span class="line">    <span class="comment">// 关键：从阻塞队列中取出事件</span></span><br><span class="line">    <span class="keyword">var</span> next: <span class="type">SparkListenerEvent</span> = eventQueue.take()</span><br><span class="line">    <span class="keyword">while</span> (next != <span class="type">POISON_PILL</span>) &#123;</span><br><span class="line">      <span class="keyword">val</span> ctx = processingTime.time()</span><br><span class="line">      <span class="keyword">try</span> &#123;</span><br><span class="line">        <span class="comment">// 关键：每一类 ListenerBus 都会将取出来饿事件发送给总线上注册过的所有SparkListener</span></span><br><span class="line">        <span class="keyword">super</span>.postToAll(next)</span><br><span class="line">      &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">        ctx.stop()</span><br><span class="line">      &#125;</span><br><span class="line">      eventCount.decrementAndGet()</span><br><span class="line">      next = eventQueue.take()</span><br><span class="line">    &#125;</span><br><span class="line">    eventCount.decrementAndGet()</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>从阻塞队列中取出事件开始消费后，获取到之前注册到每个 ListenerBus 总线上的所有 SparkListener，然后让所有的 SparkListener 处理该 event 事件。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/util/ListenerBus.scala</span></span><br><span class="line">  <span class="comment">/**</span></span><br><span class="line"><span class="comment">   * Post the event to all registered listeners. The `postToAll` caller should guarantee calling</span></span><br><span class="line"><span class="comment">   * `postToAll` in the same thread for all events.</span></span><br><span class="line"><span class="comment">   */</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">postToAll</span></span>(event: <span class="type">E</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">    <span class="comment">// JavaConverters can create a JIterableWrapper if we use asScala.</span></span><br><span class="line">    <span class="comment">// However, this method will be called frequently. To avoid the wrapper cost, here we use</span></span><br><span class="line">    <span class="comment">// Java Iterator directly.</span></span><br><span class="line">    <span class="keyword">val</span> iter = listenersPlusTimers.iterator</span><br><span class="line">    <span class="keyword">while</span> (iter.hasNext) &#123;</span><br><span class="line">      <span class="keyword">val</span> listenerAndMaybeTimer = iter.next()</span><br><span class="line">      </span><br><span class="line">      <span class="comment">// 获取到之前注册到对应总线上到 SparkListener</span></span><br><span class="line">      <span class="keyword">val</span> listener = listenerAndMaybeTimer._1</span><br><span class="line">      <span class="keyword">val</span> maybeTimer = listenerAndMaybeTimer._2</span><br><span class="line">      <span class="keyword">val</span> maybeTimerContext = <span class="keyword">if</span> (maybeTimer.isDefined) &#123;</span><br><span class="line">        maybeTimer.get.time()</span><br><span class="line">      &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        <span class="literal">null</span></span><br><span class="line">      &#125;</span><br><span class="line">      <span class="keyword">try</span> &#123;</span><br><span class="line">        <span class="comment">// SparkListener 处理具体 event 事件</span></span><br><span class="line">        doPostEvent(listener, event)</span><br><span class="line">        <span class="keyword">if</span> (<span class="type">Thread</span>.interrupted()) &#123;</span><br><span class="line">          <span class="comment">// We want to throw the InterruptedException right away so we can associate the interrupt</span></span><br><span class="line">          <span class="comment">// with this listener, as opposed to waiting for a queue.take() etc. to detect it.</span></span><br><span class="line">          <span class="keyword">throw</span> <span class="keyword">new</span> <span class="type">InterruptedException</span>()</span><br><span class="line">        &#125;</span><br><span class="line">      &#125; </span><br><span class="line">      ...</span><br><span class="line">    &#125;</span><br></pre></td></tr></table></figure>
+
+<p>doPostEvent 就是根据 event 和 SparkListener 信息来执行具体的任务状态流转逻辑。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/SparkListenerBus.scala</span></span><br><span class="line"><span class="keyword">private</span>[spark] <span class="class"><span class="keyword">trait</span> <span class="title">SparkListenerBus</span></span></span><br><span class="line">  <span class="keyword">extends</span> <span class="type">ListenerBus</span>[<span class="type">SparkListenerInterface</span>, <span class="type">SparkListenerEvent</span>] &#123;</span><br><span class="line"></span><br><span class="line">  <span class="comment">// 不同 SparkListenerEvent 的处理</span></span><br><span class="line">  <span class="keyword">protected</span> <span class="keyword">override</span> <span class="function"><span class="keyword">def</span> <span class="title">doPostEvent</span></span>(</span><br><span class="line">      listener: <span class="type">SparkListenerInterface</span>,</span><br><span class="line">      event: <span class="type">SparkListenerEvent</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">    event <span class="keyword">match</span> &#123;</span><br><span class="line">      <span class="keyword">case</span> stageSubmitted: <span class="type">SparkListenerStageSubmitted</span> =&gt;</span><br><span class="line">        listener.onStageSubmitted(stageSubmitted)</span><br><span class="line">      <span class="keyword">case</span> stageCompleted: <span class="type">SparkListenerStageCompleted</span> =&gt;</span><br><span class="line">        listener.onStageCompleted(stageCompleted)</span><br><span class="line">      <span class="keyword">case</span> jobStart: <span class="type">SparkListenerJobStart</span> =&gt;</span><br><span class="line">        listener.onJobStart(jobStart)</span><br><span class="line">      <span class="keyword">case</span> jobEnd: <span class="type">SparkListenerJobEnd</span> =&gt;</span><br><span class="line">        listener.onJobEnd(jobEnd)</span><br><span class="line">      ...</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>至此，SparkListenerEvent 事件的处理逻辑也介绍完了，比常规的生产者-消费者设计模型要稍微绕一些弯，不过还是挺有意思的。</p>
+<blockquote>
+<p>小结</p>
+<p>YARN 和 Spark 事件驱动模型的一点体会：</p>
+<ul>
+<li>YARN 的设计思想是向事件总线中注册 &lt;事件，事件处理器&gt; 的映射关系，而 Spark 则是向事件总线上注册事件处理器。</li>
+<li>YARN 中事件注册是一对一或者一对多模型，1:1 或者 1:N 模型，即一个事件对应一个或多个事件处理器，而 Spark 则是一对多模型，即一个事件会发送给所有事件总线，每一条事件总线又会将事件转发给注册到对应总线上的所有 SparkListener，这里也是一对多模型，所以 Spark 是 1:N:N 模型。</li>
+</ul>
+</blockquote>
+<h1 id="3-Spark事件流转源码引读"><a href="#3-Spark事件流转源码引读" class="headerlink" title="3. Spark事件流转源码引读"></a>3. Spark事件流转源码引读</h1><p>DAGScheduler 作为 Job 提交的入口，通过提交 Job 触发 Job 的状态变化事件，最终以 SparkListenerEvent 事件通过 SparkListenerBus 转发给不同的 SparkListener 处理。</p>
+<p>Tips: 这部分从源码角度介绍事件的流转过程，内容和 <code>Event处理逻辑</code> 小节介绍的存在一些重复，如果对于 Event 处理逻辑比较清楚，可以跳过这部分内容。</p>
+<h2 id="DAGSchedulerEvent源码引读"><a href="#DAGSchedulerEvent源码引读" class="headerlink" title="DAGSchedulerEvent源码引读"></a>DAGSchedulerEvent源码引读</h2><p>以 Spark 作业提交为例，所有 Spark 作业提交的入口最终都会调用到 DAGScheduler#submitJob() 方法，并发送 JobSubmitted 事件，JobSubmitted 继承自 DAGSchedulerEvent 事件接口。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/DAGScheduler.scala</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">submitJob</span></span>[<span class="type">T</span>, <span class="type">U</span>](</span><br><span class="line">      rdd: <span class="type">RDD</span>[<span class="type">T</span>],</span><br><span class="line">      func: (<span class="type">TaskContext</span>, <span class="type">Iterator</span>[<span class="type">T</span>]) =&gt; <span class="type">U</span>,</span><br><span class="line">      partitions: <span class="type">Seq</span>[<span class="type">Int</span>],</span><br><span class="line">      callSite: <span class="type">CallSite</span>,</span><br><span class="line">      resultHandler: (<span class="type">Int</span>, <span class="type">U</span>) =&gt; <span class="type">Unit</span>,</span><br><span class="line">      properties: <span class="type">Properties</span>): <span class="type">JobWaiter</span>[<span class="type">U</span>] = &#123;</span><br><span class="line">		...</span><br><span class="line">    <span class="comment">// 发送 JobSubmitted 事件提交作业</span></span><br><span class="line">    eventProcessLoop.post(<span class="type">JobSubmitted</span>(</span><br><span class="line">      jobId, rdd, func2, partitions.toArray, callSite, waiter,</span><br><span class="line">      <span class="type">SerializationUtils</span>.clone(properties)))</span><br><span class="line">    waiter</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/DAGSchedulerEvent.scala</span></span><br><span class="line"><span class="keyword">private</span>[scheduler] <span class="keyword">case</span> <span class="class"><span class="keyword">class</span> <span class="title">JobSubmitted</span>(<span class="params"></span></span></span><br><span class="line"><span class="params"><span class="class">    jobId: <span class="type">Int</span>,</span></span></span><br><span class="line"><span class="params"><span class="class">    finalRDD: <span class="type">RDD</span>[_],</span></span></span><br><span class="line"><span class="params"><span class="class">    func: (<span class="type">TaskContext</span>, <span class="type">Iterator</span>[_]</span>) <span class="title">=&gt;</span> <span class="title">_</span>,</span></span><br><span class="line">    partitions: <span class="type">Array</span>[<span class="type">Int</span>],</span><br><span class="line">    callSite: <span class="type">CallSite</span>,</span><br><span class="line">    listener: <span class="type">JobListener</span>,</span><br><span class="line">    properties: <span class="type">Properties</span> = <span class="literal">null</span>)</span><br><span class="line">  <span class="keyword">extends</span> <span class="type">DAGSchedulerEvent</span></span><br></pre></td></tr></table></figure>
+
+<p>eventProcessLoop 是 EventLoop 类的唯一子类，eventProcessLoop 内部没有实现 post() 方法，直接调用 EventLoop 父类将事件添加到 eventQueue 阻塞队列中，此时生产者已生产好数据。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/util/EventLoop.scala</span></span><br><span class="line">  <span class="comment">/**</span></span><br><span class="line"><span class="comment">   * Put the event into the event queue. The event thread will process it later.</span></span><br><span class="line"><span class="comment">   */</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">post</span></span>(event: <span class="type">E</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">    <span class="comment">// 阻塞队列添加事件</span></span><br><span class="line">    eventQueue.put(event)</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">val</span> eventQueue: <span class="type">BlockingQueue</span>[<span class="type">E</span>] = <span class="keyword">new</span> <span class="type">LinkedBlockingDeque</span>[<span class="type">E</span>]()</span><br></pre></td></tr></table></figure>
+
+<p>那消费者是如何来消费生产者生产的事件呢？在 DAGScheduler 类初始化时有一段非常关键的代码。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/DAGScheduler.scala</span></span><br><span class="line">  eventProcessLoop.start()</span><br></pre></td></tr></table></figure>
+
+<p>eventProcessLoop.start() 调用了 EventLoop 类的 start 方法，start() 方法内部启动一个 eventThread 独立线程，独立线程的作用就是死循环地取出前面 post 到阻塞队列中的 event 事件，然后交给 onReceive() 方法执行具体逻辑。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/util/EventLoop.scala</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">start</span></span>(): <span class="type">Unit</span> = &#123;</span><br><span class="line">    <span class="keyword">if</span> (stopped.get) &#123;</span><br><span class="line">      <span class="keyword">throw</span> <span class="keyword">new</span> <span class="type">IllegalStateException</span>(name + <span class="string">&quot; has already been stopped&quot;</span>)</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="comment">// Call onStart before starting the event thread to make sure it happens before onReceive</span></span><br><span class="line">    onStart()</span><br><span class="line">    <span class="comment">// start() 方法内部启动一个 eventThread 独立线程</span></span><br><span class="line">    eventThread.start()</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="keyword">private</span>[spark] <span class="keyword">val</span> eventThread = <span class="keyword">new</span> <span class="type">Thread</span>(name) &#123;</span><br><span class="line">    setDaemon(<span class="literal">true</span>)</span><br><span class="line"></span><br><span class="line">    <span class="keyword">override</span> <span class="function"><span class="keyword">def</span> <span class="title">run</span></span>(): <span class="type">Unit</span> = &#123;</span><br><span class="line">      <span class="keyword">try</span> &#123;</span><br><span class="line">        <span class="keyword">while</span> (!stopped.get) &#123;</span><br><span class="line">          <span class="comment">// 关键：从阻塞队列 eventQueue 中取出事件</span></span><br><span class="line">          <span class="keyword">val</span> event = eventQueue.take()</span><br><span class="line">          <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="comment">// 关键：具体处理事件的逻辑</span></span><br><span class="line">            onReceive(event)</span><br><span class="line">          &#125; <span class="keyword">catch</span> &#123;</span><br><span class="line">            <span class="keyword">case</span> <span class="type">NonFatal</span>(e) =&gt;</span><br><span class="line">              <span class="keyword">try</span> &#123;</span><br><span class="line">                onError(e)</span><br><span class="line">              &#125; <span class="keyword">catch</span> &#123;</span><br><span class="line">                <span class="keyword">case</span> <span class="type">NonFatal</span>(e) =&gt; logError(<span class="string">&quot;Unexpected error in &quot;</span> + name, e)</span><br><span class="line">              &#125;</span><br><span class="line">          &#125;</span><br><span class="line">        &#125;</span><br><span class="line">      &#125; <span class="keyword">catch</span> &#123;</span><br><span class="line">        <span class="keyword">case</span> ie: <span class="type">InterruptedException</span> =&gt; <span class="comment">// exit even if eventQueue is not empty</span></span><br><span class="line">        <span class="keyword">case</span> <span class="type">NonFatal</span>(e) =&gt; logError(<span class="string">&quot;Unexpected error in &quot;</span> + name, e)</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>具体 evnet 的处理逻辑交给 onReceive(event) 方法，由于 EventLoop 内部没有实现该方法，并且只有唯一的子类 DAGSchedulerEventProcessLoop，那该类一定实现了对应的方法。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/DAGScheduler.scala</span></span><br><span class="line"><span class="comment">// 内部类：DAGSchedulerEventProcessLoop</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">// EventLoop 子类实现的 onReceive 方法</span></span><br><span class="line">  <span class="keyword">override</span> <span class="function"><span class="keyword">def</span> <span class="title">onReceive</span></span>(event: <span class="type">DAGSchedulerEvent</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">    <span class="keyword">val</span> timerContext = timer.time()</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">      doOnReceive(event)</span><br><span class="line">    &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">      timerContext.stop()</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="comment">// 根据 DAGSchedulerEvent 事件类型执行想要逻辑</span></span><br><span class="line">  <span class="keyword">private</span> <span class="function"><span class="keyword">def</span> <span class="title">doOnReceive</span></span>(event: <span class="type">DAGSchedulerEvent</span>): <span class="type">Unit</span> = event <span class="keyword">match</span> &#123;</span><br><span class="line">    <span class="comment">// 关键：根据前面提交的 JobSubmitted 事件执行具体的逻辑</span></span><br><span class="line">    <span class="keyword">case</span> <span class="type">JobSubmitted</span>(jobId, rdd, func, partitions, callSite, listener, properties) =&gt;</span><br><span class="line">      dagScheduler.handleJobSubmitted(jobId, rdd, func, partitions, callSite, listener, properties)</span><br><span class="line"></span><br><span class="line">    <span class="keyword">case</span> <span class="type">MapStageSubmitted</span>(jobId, dependency, callSite, listener, properties) =&gt;</span><br><span class="line">      dagScheduler.handleMapStageSubmitted(jobId, dependency, callSite, listener, properties)</span><br><span class="line">    ...</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>至此，DAGSchedulerEvent 的 JobSubmitted 事件的生产和消费流程已比较清晰，相对而已还是比较简单的。</p>
+<h2 id="SparkListenerEvent源码引读"><a href="#SparkListenerEvent源码引读" class="headerlink" title="SparkListenerEvent源码引读"></a>SparkListenerEvent源码引读</h2><p>这里还是把 2.3.2 小节的图放这里，方便理解 SparkListenerEvent 事件的流转方式。</p>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/11/28/e3ca4b2a6644c941bd6269f5026cb81d-1638101616428-c8329717-c941-43d5-8e6d-7ebbe3f832e5-20211128204724899-9a9e93.png" alt="img"></p>
+<p>接着上面 DAGScheduler 类处理完 JobSubmitted 事件，在 handleJobSubmitted 处理事件逻辑中，最后会发送 SparkListenerJobStart 事件。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/DAGScheduler.scala</span></span><br><span class="line"> <span class="keyword">private</span>[scheduler] <span class="function"><span class="keyword">def</span> <span class="title">handleJobSubmitted</span></span>(jobId: <span class="type">Int</span>,</span><br><span class="line">     finalRDD: <span class="type">RDD</span>[_],</span><br><span class="line">     func: (<span class="type">TaskContext</span>, <span class="type">Iterator</span>[_]) =&gt; _,</span><br><span class="line">     partitions: <span class="type">Array</span>[<span class="type">Int</span>],</span><br><span class="line">     callSite: <span class="type">CallSite</span>,</span><br><span class="line">     listener: <span class="type">JobListener</span>,</span><br><span class="line">     properties: <span class="type">Properties</span>) &#123;</span><br><span class="line">   ...</span><br><span class="line">   <span class="comment">// SparkListenerEvent 事件的生产，以 SparkListenerJobStart 事件为例</span></span><br><span class="line">   listenerBus.post(</span><br><span class="line">     <span class="type">SparkListenerJobStart</span>(job.jobId, jobSubmissionTime, stageInfos, properties))</span><br><span class="line">   submitStage(finalStage)</span><br><span class="line"> &#125;   </span><br><span class="line"></span><br><span class="line"><span class="keyword">private</span>[spark] <span class="class"><span class="keyword">class</span> <span class="title">DAGScheduler</span>(<span class="params"></span></span></span><br><span class="line"><span class="params"><span class="class">   private[scheduler] val sc: <span class="type">SparkContext</span>,</span></span></span><br><span class="line"><span class="params"><span class="class">   private[scheduler] val taskScheduler: <span class="type">TaskScheduler</span>,</span></span></span><br><span class="line"><span class="params"><span class="class">   // listenerBus 属于 <span class="type">LiveListenerBus</span></span></span></span><br><span class="line"><span class="params"><span class="class">   listenerBus: <span class="type">LiveListenerBus</span>,</span></span></span><br><span class="line"><span class="params"><span class="class">   ...</span></span></span><br><span class="line"><span class="params"><span class="class">   &#125;</span></span></span><br></pre></td></tr></table></figure>
+
+<p>经过 LiveListenerBus#post 事件后，这里和之前的事件生产者逻辑不太一样，它并不是将事件添加到一个 EventQueue 中，而是通过 postToQueues() 方法向 queues 数组中分别 post 该事件。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/LiveListenerBus.scala</span></span><br><span class="line">  <span class="comment">/** Post an event to all queues. */</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">post</span></span>(event: <span class="type">SparkListenerEvent</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">    <span class="keyword">if</span> (stopped.get()) &#123;</span><br><span class="line">      <span class="keyword">return</span></span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    metrics.numEventsPosted.inc()</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 判断 event buffer 数组是否为空，大多数情况都是调用这里发送事件</span></span><br><span class="line">    <span class="keyword">if</span> (queuedEvents == <span class="literal">null</span>) &#123;</span><br><span class="line">      postToQueues(event)</span><br><span class="line">      <span class="keyword">return</span></span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">		<span class="comment">// 判读LiveListenerBus 是否已经启动</span></span><br><span class="line">    synchronized &#123;</span><br><span class="line">      <span class="keyword">if</span> (!started.get()) &#123;</span><br><span class="line">        queuedEvents += event</span><br><span class="line">        <span class="keyword">return</span></span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// If the bus was already started when the check above was made, just post directly to the</span></span><br><span class="line">    <span class="comment">// queues.</span></span><br><span class="line">    postToQueues(event)</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>postToQueues 方法是和之前生产消费模型不同的关键，添加了一个中间阶段，postToQueues 方法收到事件后将其分别发送给 queues 队列中存放的四类事件总线。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/LiveListenerBus.scala</span></span><br><span class="line">  <span class="keyword">private</span> <span class="function"><span class="keyword">def</span> <span class="title">postToQueues</span></span>(event: <span class="type">SparkListenerEvent</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">    <span class="keyword">val</span> it = queues.iterator()</span><br><span class="line">    <span class="comment">// 关键：向 queues 中的四类事件总线分别发送 event 事件</span></span><br><span class="line">    <span class="keyword">while</span> (it.hasNext()) &#123;</span><br><span class="line">      it.next().post(event)</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 关键数据结构，存放前面介绍的四类事件总线，线程安全的 ArrayList 集合。</span></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">val</span> queues = <span class="keyword">new</span> <span class="type">CopyOnWriteArrayList</span>[<span class="type">AsyncEventQueue</span>]()</span><br></pre></td></tr></table></figure>
+
+<p>将事件分别发送给 queues 的各种事件总线时，在此时又看到了熟悉生产消费模型，将事件添加到容量有限的阻塞队列中。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/AsyncEventQueue.scala</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">post</span></span>(event: <span class="type">SparkListenerEvent</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">    eventCount.incrementAndGet()</span><br><span class="line">    <span class="comment">// 关键：将事件添加到容量有限的阻塞队列中</span></span><br><span class="line">    <span class="keyword">if</span> (eventQueue.offer(event)) &#123;</span><br><span class="line">      <span class="keyword">return</span></span><br><span class="line">    &#125;</span><br><span class="line">    ...</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="comment">// 容量有限的阻塞队列</span></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">val</span> eventQueue = <span class="keyword">new</span> <span class="type">LinkedBlockingQueue</span>[<span class="type">SparkListenerEvent</span>](</span><br><span class="line">    conf.get(<span class="type">LISTENER_BUS_EVENT_QUEUE_CAPACITY</span>))</span><br></pre></td></tr></table></figure>
+
+<p>同样的，生产者为四类四类事件总线分别生产了同一个事件，那四类事件总线又是如何把这些事件转发到对应的 SparkListener 处理呢？在 AsyncEventQueue 启动时，会启动一个独立的异步线程，用于将接收的事件转发到对应的 SparkListener 处理。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/AsyncEventQueue.scala</span></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">val</span> dispatchThread = <span class="keyword">new</span> <span class="type">Thread</span>(<span class="string">s&quot;spark-listener-group-<span class="subst">$name</span>&quot;</span>) &#123;</span><br><span class="line">    setDaemon(<span class="literal">true</span>)</span><br><span class="line">    <span class="keyword">override</span> <span class="function"><span class="keyword">def</span> <span class="title">run</span></span>(): <span class="type">Unit</span> = <span class="type">Utils</span>.tryOrStopSparkContext(sc) &#123;</span><br><span class="line">      <span class="comment">// 四类事件总线都有这样的异步独立线程去转发接收到的事件</span></span><br><span class="line">      dispatch()</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="keyword">private</span> <span class="function"><span class="keyword">def</span> <span class="title">dispatch</span></span>(): <span class="type">Unit</span> = <span class="type">LiveListenerBus</span>.withinListenerThread.withValue(<span class="literal">true</span>) &#123;</span><br><span class="line">    <span class="comment">// 关键：从阻塞队列中取出事件</span></span><br><span class="line">    <span class="keyword">var</span> next: <span class="type">SparkListenerEvent</span> = eventQueue.take()</span><br><span class="line">    <span class="keyword">while</span> (next != <span class="type">POISON_PILL</span>) &#123;</span><br><span class="line">      <span class="keyword">val</span> ctx = processingTime.time()</span><br><span class="line">      <span class="keyword">try</span> &#123;</span><br><span class="line">        <span class="comment">// 关键：每一类 ListenerBus 都会将取出来饿事件发送给总线上注册过的所有SparkListener</span></span><br><span class="line">        <span class="keyword">super</span>.postToAll(next)</span><br><span class="line">      &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">        ctx.stop()</span><br><span class="line">      &#125;</span><br><span class="line">      eventCount.decrementAndGet()</span><br><span class="line">      next = eventQueue.take()</span><br><span class="line">    &#125;</span><br><span class="line">    eventCount.decrementAndGet()</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>从阻塞队列中取出事件开始消费后，获取到之前注册到每个 ListenerBus 总线上的所有 SparkListener，然后让所有的 SparkListener 处理该 event 事件。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/util/ListenerBus.scala</span></span><br><span class="line">  <span class="comment">/**</span></span><br><span class="line"><span class="comment">   * Post the event to all registered listeners. The `postToAll` caller should guarantee calling</span></span><br><span class="line"><span class="comment">   * `postToAll` in the same thread for all events.</span></span><br><span class="line"><span class="comment">   */</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">postToAll</span></span>(event: <span class="type">E</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">    <span class="comment">// JavaConverters can create a JIterableWrapper if we use asScala.</span></span><br><span class="line">    <span class="comment">// However, this method will be called frequently. To avoid the wrapper cost, here we use</span></span><br><span class="line">    <span class="comment">// Java Iterator directly.</span></span><br><span class="line">    <span class="keyword">val</span> iter = listenersPlusTimers.iterator</span><br><span class="line">    <span class="keyword">while</span> (iter.hasNext) &#123;</span><br><span class="line">      <span class="keyword">val</span> listenerAndMaybeTimer = iter.next()</span><br><span class="line">      </span><br><span class="line">      <span class="comment">// 获取到之前注册到对应总线上到 SparkListener</span></span><br><span class="line">      <span class="keyword">val</span> listener = listenerAndMaybeTimer._1</span><br><span class="line">      <span class="keyword">val</span> maybeTimer = listenerAndMaybeTimer._2</span><br><span class="line">      <span class="keyword">val</span> maybeTimerContext = <span class="keyword">if</span> (maybeTimer.isDefined) &#123;</span><br><span class="line">        maybeTimer.get.time()</span><br><span class="line">      &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        <span class="literal">null</span></span><br><span class="line">      &#125;</span><br><span class="line">      <span class="keyword">try</span> &#123;</span><br><span class="line">        <span class="comment">// SparkListener 处理具体 event 事件</span></span><br><span class="line">        doPostEvent(listener, event)</span><br><span class="line">        <span class="keyword">if</span> (<span class="type">Thread</span>.interrupted()) &#123;</span><br><span class="line">          <span class="comment">// We want to throw the InterruptedException right away so we can associate the interrupt</span></span><br><span class="line">          <span class="comment">// with this listener, as opposed to waiting for a queue.take() etc. to detect it.</span></span><br><span class="line">          <span class="keyword">throw</span> <span class="keyword">new</span> <span class="type">InterruptedException</span>()</span><br><span class="line">        &#125;</span><br><span class="line">      &#125; </span><br><span class="line">      ...</span><br><span class="line">    &#125;</span><br></pre></td></tr></table></figure>
+
+<p>doPostEvent 就是根据 event 和 SparkListener 信息来执行具体的任务状态流转逻辑，根据继承关系交给对应的 SparkListener 处理。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/SparkListenerBus.scala</span></span><br><span class="line"><span class="keyword">private</span>[spark] <span class="class"><span class="keyword">trait</span> <span class="title">SparkListenerBus</span></span></span><br><span class="line">  <span class="keyword">extends</span> <span class="type">ListenerBus</span>[<span class="type">SparkListenerInterface</span>, <span class="type">SparkListenerEvent</span>] &#123;</span><br><span class="line"></span><br><span class="line">  <span class="comment">// 不同 SparkListenerEvent 的处理</span></span><br><span class="line">  <span class="keyword">protected</span> <span class="keyword">override</span> <span class="function"><span class="keyword">def</span> <span class="title">doPostEvent</span></span>(</span><br><span class="line">      listener: <span class="type">SparkListenerInterface</span>,</span><br><span class="line">      event: <span class="type">SparkListenerEvent</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">    event <span class="keyword">match</span> &#123;</span><br><span class="line">      <span class="keyword">case</span> stageSubmitted: <span class="type">SparkListenerStageSubmitted</span> =&gt;</span><br><span class="line">        listener.onStageSubmitted(stageSubmitted)</span><br><span class="line">      <span class="keyword">case</span> stageCompleted: <span class="type">SparkListenerStageCompleted</span> =&gt;</span><br><span class="line">        listener.onStageCompleted(stageCompleted)</span><br><span class="line">      <span class="keyword">case</span> jobStart: <span class="type">SparkListenerJobStart</span> =&gt;</span><br><span class="line">        listener.onJobStart(jobStart)</span><br><span class="line">      <span class="keyword">case</span> jobEnd: <span class="type">SparkListenerJobEnd</span> =&gt;</span><br><span class="line">        listener.onJobEnd(jobEnd)</span><br><span class="line">      ...</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>至此，SparkListenerEvent 事件的处理逻辑也介绍完了，比常规的生产者-消费者设计模型要稍微绕一些弯，不过还是挺有意思的。</p>
+<h1 id="参考资料"><a href="#参考资料" class="headerlink" title="参考资料"></a>参考资料</h1><ul>
+<li>耿嘉安，《Spark内核设计的艺术：架构设计与实现》</li>
+<li><a target="_blank" rel="noopener" href="https://blog.csdn.net/GYHYCX/article/details/118727960">死磕 Spark 事件总线——聊聊 Spark 中事件监听是如何实现的</a></li>
+</ul>
+
+    </div>
+
+    
+    
+    
+
+    <div>
+      
+      <div>
+	 
+		<div style="text-align:center;color:#bfbfbf;font-size:16px;"> 
+			<span>-------- 本文结束 </span> <i class="fa fa-paw"></i> <span> 感谢阅读 --------</span>
+		</div> 
+	
+</div>
+      
+    </div>
+        <div class="reward-container">
+  <div></div>
+  <button onclick="var qr = document.getElementById('qr'); qr.style.display = (qr.style.display === 'none') ? 'block' : 'none';">
+    请我喝杯咖啡~
+  </button>
+  <div id="qr" style="display: none;">
+      
+      <div style="display: inline-block;">
+        <img src="/images/wechatpay.png" alt="笨小康 微信打赏">
+        <p>微信打赏</p>
+      </div>
+      
+      <div style="display: inline-block;">
+        <img src="/images/alipay.png" alt="笨小康 支付宝打赏">
+        <p>支付宝打赏</p>
+      </div>
+
+  </div>
+</div>
+
+
+      <footer class="post-footer">
+          <div class="post-tags">
+              <a href="/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/" rel="tag"><i class="fa fa-tag"></i> 大数据</a>
+              <a href="/tags/Spark/" rel="tag"><i class="fa fa-tag"></i> Spark</a>
+              <a href="/tags/Spark%E6%BA%90%E7%A0%81/" rel="tag"><i class="fa fa-tag"></i> Spark源码</a>
+          </div>
+
+        
+
+
+        
+    <div class="post-nav">
+      <div class="post-nav-item">
+    <a href="/2021/11/28/YARN-Dispatcher%E8%AE%BE%E8%AE%A1%E6%80%9D%E6%83%B3%E5%8F%8A%E6%BA%90%E7%A0%81%E5%BC%95%E8%AF%BB/" rel="prev" title="YARN Dispatcher设计思想及源码引读">
+      <i class="fa fa-chevron-left"></i> YARN Dispatcher设计思想及源码引读
+    </a></div>
+      <div class="post-nav-item"></div>
+    </div>
+      </footer>
+    
+  </article>
+  
+  
+  
+
+
+
+
+          </div>
+          
+
+<script>
+  window.addEventListener('tabs:register', () => {
+    let { activeClass } = CONFIG.comments;
+    if (CONFIG.comments.storage) {
+      activeClass = localStorage.getItem('comments_active') || activeClass;
+    }
+    if (activeClass) {
+      let activeTab = document.querySelector(`a[href="#comment-${activeClass}"]`);
+      if (activeTab) {
+        activeTab.click();
+      }
+    }
+  });
+  if (CONFIG.comments.storage) {
+    window.addEventListener('tabs:click', event => {
+      if (!event.target.matches('.tabs-comment .tab-content .tab-pane')) return;
+      let commentClass = event.target.classList[1];
+      localStorage.setItem('comments_active', commentClass);
+    });
+  }
+</script>
+
+        </div>
+          
+  
+  <div class="toggle sidebar-toggle">
+    <span class="toggle-line toggle-line-first"></span>
+    <span class="toggle-line toggle-line-middle"></span>
+    <span class="toggle-line toggle-line-last"></span>
+  </div>
+
+  <aside class="sidebar">
+    <div class="sidebar-inner">
+
+      <ul class="sidebar-nav motion-element">
+        <li class="sidebar-nav-toc">
+          文章目录
+        </li>
+        <li class="sidebar-nav-overview">
+          站点概览
+        </li>
+      </ul>
+
+      <!--noindex-->
+      <div class="post-toc-wrap sidebar-panel">
+          <div class="post-toc motion-element"><ol class="nav"><li class="nav-item nav-level-1"><a class="nav-link" href="#1-Spark-Listener%E4%BB%8B%E7%BB%8D"><span class="nav-text">1. Spark Listener介绍</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#2-Spark-Listener%E8%AE%BE%E8%AE%A1%E5%8E%9F%E7%90%86"><span class="nav-text">2. Spark Listener设计原理</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#2-1-ListenerBus%E6%80%BB%E8%A7%88"><span class="nav-text">2.1 ListenerBus总览</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#2-2-SparkListener%E6%B3%A8%E5%86%8C%E9%80%BB%E8%BE%91"><span class="nav-text">2.2 SparkListener注册逻辑</span></a><ol class="nav-child"><li class="nav-item nav-level-3"><a class="nav-link" href="#2-2-1-%E6%B3%A8%E5%86%8C%E5%88%B0Shared%E6%80%BB%E7%BA%BF"><span class="nav-text">2.2.1 注册到Shared总线</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#2-2-2-%E6%B3%A8%E5%86%8C%E5%88%B0ExecutorManagement%E6%80%BB%E7%BA%BF"><span class="nav-text">2.2.2 注册到ExecutorManagement总线</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#2-2-3-%E6%B3%A8%E5%86%8C%E5%88%B0AppStatus%E6%80%BB%E7%BA%BF"><span class="nav-text">2.2.3 注册到AppStatus总线</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#2-2-4-%E6%B3%A8%E5%86%8C%E5%88%B0EventLog%E6%80%BB%E7%BA%BF"><span class="nav-text">2.2.4 注册到EventLog总线</span></a></li></ol></li><li class="nav-item nav-level-2"><a class="nav-link" href="#2-3-Event%E5%A4%84%E7%90%86%E9%80%BB%E8%BE%91"><span class="nav-text">2.3 Event处理逻辑</span></a><ol class="nav-child"><li class="nav-item nav-level-3"><a class="nav-link" href="#2-3-1-DAGSchedulerEvent%E5%A4%84%E7%90%86%E9%80%BB%E8%BE%91"><span class="nav-text">2.3.1 DAGSchedulerEvent处理逻辑</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#2-3-2-SparkListenerEvent%E5%A4%84%E7%90%86%E9%80%BB%E8%BE%91"><span class="nav-text">2.3.2 SparkListenerEvent处理逻辑</span></a></li></ol></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#3-Spark%E4%BA%8B%E4%BB%B6%E6%B5%81%E8%BD%AC%E6%BA%90%E7%A0%81%E5%BC%95%E8%AF%BB"><span class="nav-text">3. Spark事件流转源码引读</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#DAGSchedulerEvent%E6%BA%90%E7%A0%81%E5%BC%95%E8%AF%BB"><span class="nav-text">DAGSchedulerEvent源码引读</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#SparkListenerEvent%E6%BA%90%E7%A0%81%E5%BC%95%E8%AF%BB"><span class="nav-text">SparkListenerEvent源码引读</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="nav-text">参考资料</span></a></li></ol></div>
+      </div>
+      <!--/noindex-->
+
+      <div class="site-overview-wrap sidebar-panel">
+        <div class="site-author motion-element" itemprop="author" itemscope itemtype="http://schema.org/Person">
+  <p class="site-author-name" itemprop="name">笨小康</p>
+  <div class="site-description" itemprop="description"></div>
+</div>
+<div class="site-state-wrap motion-element">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+          <a href="/archives/">
+        
+          <span class="site-state-item-count">15</span>
+          <span class="site-state-item-name">日志</span>
+        </a>
+      </div>
+      <div class="site-state-item site-state-categories">
+            <a href="/categories/">
+          
+        <span class="site-state-item-count">4</span>
+        <span class="site-state-item-name">分类</span></a>
+      </div>
+      <div class="site-state-item site-state-tags">
+            <a href="/tags/">
+          
+        <span class="site-state-item-count">7</span>
+        <span class="site-state-item-name">标签</span></a>
+      </div>
+  </nav>
+</div>
+
+
+
+      </div>
+
+    </div>
+  </aside>
+  <div id="sidebar-dimmer"></div>
+
+
+      </div>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        
+
+        
+
+<div class="copyright">
+  
+  &copy; 
+  <span itemprop="copyrightYear">2021</span>
+  <span class="with-love">
+    <i class="fa fa-heart"></i>
+  </span>
+  <span class="author" itemprop="copyrightHolder">笨小康</span>
+</div>
+
+        
+
+
+
+
+
+
+
+
+      </div>
+    </footer>
+  </div>
+
+  
+  <script src="/lib/anime.min.js"></script>
+  <script src="/lib/velocity/velocity.min.js"></script>
+  <script src="/lib/velocity/velocity.ui.min.js"></script>
+
+<script src="/js/utils.js"></script>
+
+<script src="/js/motion.js"></script>
+
+
+<script src="/js/schemes/pisces.js"></script>
+
+
+<script src="/js/next-boot.js"></script>
+
+
+
+
+  
+
+
+
+
+  
+<script src="/js/local-search.js"></script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+  
+
+</body>
+</html>
