@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=2">
+<meta name="theme-color" content="#222">
+<meta name="generator" content="Hexo 5.4.0">
+  <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon-next.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/images/favicon-32x32-next.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/favicon-16x16-next.png">
+  <link rel="mask-icon" href="/images/logo.svg" color="#222">
+
+<link rel="stylesheet" href="/css/main.css">
+
+<link rel="stylesheet" href="//fonts.googleapis.com/css?family=Lato:300,300italic,400,400italic,700,700italic&display=swap&subset=latin,latin-ext">
+<link rel="stylesheet" href="/lib/font-awesome/css/all.min.css">
+
+<script id="hexo-configurations">
+    var NexT = window.NexT || {};
+    var CONFIG = {"hostname":"yoursite.com","root":"/","scheme":"Pisces","version":"7.8.0","exturl":false,"sidebar":{"position":"left","display":"post","padding":18,"offset":12,"onmobile":false},"copycode":{"enable":true,"show_result":true,"style":"default"},"back2top":{"enable":true,"sidebar":false,"scrollpercent":false},"bookmark":{"enable":false,"color":"#222","save":"auto"},"fancybox":false,"mediumzoom":false,"lazyload":false,"pangu":false,"comments":{"style":"tabs","active":null,"storage":true,"lazyload":false,"nav":null},"algolia":{"hits":{"per_page":10},"labels":{"input_placeholder":"Search for Posts","hits_empty":"We didn't find any results for the search: ${query}","hits_stats":"${hits} results found in ${time} ms"}},"localsearch":{"enable":true,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false},"motion":{"enable":true,"async":false,"transition":{"post_block":"fadeIn","post_header":"slideDownIn","post_body":"slideDownIn","coll_header":"slideLeftIn","sidebar":"slideUpIn"}},"path":"search.xml"};
+  </script>
+
+  <meta name="description" content="导读：Spark 中一个很重要的能力是将数据持久化（或称为缓存），缓存是迭代算法和快速的交互式使用的重要工具，在多个操作间都可以访问这些持久化的数据，当持久化一个 RDD 时，每个节点的其它分区都可以直接使用该缓存的 RDD， 这样可以加快其他操作的计算速度。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Spark RDD持久化机制及源码分析">
+<meta property="og:url" content="http://yoursite.com/2021/12/05/Spark-RDD%E6%8C%81%E4%B9%85%E5%8C%96%E6%9C%BA%E5%88%B6%E5%8F%8A%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/index.html">
+<meta property="og:site_name" content="笨小康的博客">
+<meta property="og:description" content="导读：Spark 中一个很重要的能力是将数据持久化（或称为缓存），缓存是迭代算法和快速的交互式使用的重要工具，在多个操作间都可以访问这些持久化的数据，当持久化一个 RDD 时，每个节点的其它分区都可以直接使用该缓存的 RDD， 这样可以加快其他操作的计算速度。">
+<meta property="og:locale" content="zh_CN">
+<meta property="article:published_time" content="2021-12-05T10:41:21.000Z">
+<meta property="article:modified_time" content="2021-12-19T11:25:12.407Z">
+<meta property="article:author" content="笨小康">
+<meta property="article:tag" content="Spark">
+<meta property="article:tag" content="Spark源码">
+<meta property="article:tag" content="Spark原理">
+<meta name="twitter:card" content="summary">
+
+<link rel="canonical" href="http://yoursite.com/2021/12/05/Spark-RDD%E6%8C%81%E4%B9%85%E5%8C%96%E6%9C%BA%E5%88%B6%E5%8F%8A%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/">
+
+
+<script id="page-configurations">
+  // https://hexo.io/docs/variables.html
+  CONFIG.page = {
+    sidebar: "",
+    isHome : false,
+    isPost : true,
+    lang   : 'zh-CN'
+  };
+</script>
+
+  <title>Spark RDD持久化机制及源码分析 | 笨小康的博客</title>
+  
+
+
+
+
+
+
+  <noscript>
+  <style>
+  .use-motion .brand,
+  .use-motion .menu-item,
+  .sidebar-inner,
+  .use-motion .post-block,
+  .use-motion .pagination,
+  .use-motion .comments,
+  .use-motion .post-header,
+  .use-motion .post-body,
+  .use-motion .collection-header { opacity: initial; }
+
+  .use-motion .site-title,
+  .use-motion .site-subtitle {
+    opacity: initial;
+    top: initial;
+  }
+
+  .use-motion .logo-line-before i { left: initial; }
+  .use-motion .logo-line-after i { right: initial; }
+  </style>
+</noscript>
+
+</head>
+
+<body itemscope itemtype="http://schema.org/WebPage">
+  <div class="container use-motion">
+    <div class="headband"></div>
+
+    <header class="header" itemscope itemtype="http://schema.org/WPHeader">
+      <div class="header-inner"><div class="site-brand-container">
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="切换导航栏">
+      <span class="toggle-line toggle-line-first"></span>
+      <span class="toggle-line toggle-line-middle"></span>
+      <span class="toggle-line toggle-line-last"></span>
+    </div>
+  </div>
+
+  <div class="site-meta">
+
+    <a href="/" class="brand" rel="start">
+      <span class="logo-line-before"><i></i></span>
+      <h1 class="site-title">笨小康的博客</h1>
+      <span class="logo-line-after"><i></i></span>
+    </a>
+      <p class="site-subtitle" itemprop="description">星辰大海, 如期而至</p>
+  </div>
+
+  <div class="site-nav-right">
+    <div class="toggle popup-trigger">
+        <i class="fa fa-search fa-fw fa-lg"></i>
+    </div>
+  </div>
+</div>
+
+
+
+
+<nav class="site-nav">
+  <ul id="menu" class="main-menu menu">
+        <li class="menu-item menu-item-home">
+
+    <a href="/" rel="section"><i class="fa fa-home fa-fw"></i>首页</a>
+
+  </li>
+        <li class="menu-item menu-item-archives">
+
+    <a href="/archives/" rel="section"><i class="fa fa-archive fa-fw"></i>归档</a>
+
+  </li>
+        <li class="menu-item menu-item-categories">
+
+    <a href="/categories/" rel="section"><i class="fa fa-th fa-fw"></i>分类</a>
+
+  </li>
+        <li class="menu-item menu-item-tags">
+
+    <a href="/tags/" rel="section"><i class="fa fa-tags fa-fw"></i>标签云</a>
+
+  </li>
+        <li class="menu-item menu-item-flomo">
+
+    <a href="/categories/flomo/" rel="section"><i class="fa fa-lightbulb fa-fw"></i>随想录</a>
+
+  </li>
+        <li class="menu-item menu-item-about">
+
+    <a href="/about/" rel="section"><i class="fa fa-user fa-fw"></i>关于我</a>
+
+  </li>
+      <li class="menu-item menu-item-search">
+        <a role="button" class="popup-trigger"><i class="fa fa-search fa-fw"></i>搜文章
+        </a>
+      </li>
+  </ul>
+</nav>
+
+
+
+  <div class="search-pop-overlay">
+    <div class="popup search-popup">
+        <div class="search-header">
+  <span class="search-icon">
+    <i class="fa fa-search"></i>
+  </span>
+  <div class="search-input-container">
+    <input autocomplete="off" autocapitalize="off"
+           placeholder="搜索..." spellcheck="false"
+           type="search" class="search-input">
+  </div>
+  <span class="popup-btn-close">
+    <i class="fa fa-times-circle"></i>
+  </span>
+</div>
+<div id="search-result">
+  <div id="no-result">
+    <i class="fa fa-spinner fa-pulse fa-5x fa-fw"></i>
+  </div>
+</div>
+
+    </div>
+  </div>
+
+</div>
+    </header>
+
+    
+  <div class="back-to-top">
+    <i class="fa fa-arrow-up"></i>
+    <span>0%</span>
+  </div>
+  <div class="reading-progress-bar"></div>
+
+
+    <main class="main">
+      <div class="main-inner">
+        <div class="content-wrap">
+          
+
+          <div class="content post posts-expand">
+            
+
+    
+  
+  
+  <article itemscope itemtype="http://schema.org/Article" class="post-block" lang="zh-CN">
+    <link itemprop="mainEntityOfPage" href="http://yoursite.com/2021/12/05/Spark-RDD%E6%8C%81%E4%B9%85%E5%8C%96%E6%9C%BA%E5%88%B6%E5%8F%8A%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/images/avatar.gif">
+      <meta itemprop="name" content="笨小康">
+      <meta itemprop="description" content="">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="笨小康的博客">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          Spark RDD持久化机制及源码分析
+        </h1>
+
+        <div class="post-meta">
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-calendar"></i>
+              </span>
+              <span class="post-meta-item-text">发表于</span>
+
+              <time title="创建时间：2021-12-05 18:41:21" itemprop="dateCreated datePublished" datetime="2021-12-05T18:41:21+08:00">2021-12-05</time>
+            </span>
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-folder"></i>
+              </span>
+              <span class="post-meta-item-text">分类于</span>
+                <span itemprop="about" itemscope itemtype="http://schema.org/Thing">
+                  <a href="/categories/Spark/" itemprop="url" rel="index"><span itemprop="name">Spark</span></a>
+                </span>
+            </span>
+
+          
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody">
+
+      
+        <blockquote>
+<p>导读：Spark 中一个很重要的能力是将数据持久化（或称为缓存），缓存是迭代算法和快速的交互式使用的重要工具，在多个操作间都可以访问这些持久化的数据，当持久化一个 RDD 时，每个节点的其它分区都可以直接使用该缓存的 RDD， 这样可以加快其他操作的计算速度。</p>
+</blockquote>
+<h1 id="1-RDD-持久化"><a href="#1-RDD-持久化" class="headerlink" title="1. RDD 持久化"></a>1. RDD 持久化</h1><p>因为 Spark 程序执行的特性，即延迟执行和基于 Lineage 最大化的 pipeline，当 Spark 中由于对某个 RDD 的 Action 操作触发了作业时，会基于 Lineage 从后往前推，找到该 RDD 的源头 RDD，然后从前往后计算出结果。</p>
+<p>很明显，如果对某个 RDD 执行了多次 Transformation 和 Action 操作，每次 Action 操作出发了作业时都会重新从源头 RDD 出计算一遍来获得 RDD，再对这个 RDD 执行相应的操作。当 RDD 本身计算特别复杂和耗时时，这种方式性能是非常差的，此时必须考虑对计算结果的数据进行持久化。</p>
+<p>数据持久化（或称为缓存）就是将计算出来的 RDD 根据配置的持久化级别，保存在内存或磁盘中，以后每次对该 RDD 进行算子操作时，都会直接从内存或者磁盘中提取持久化的 RDD 数据，然后执行算子操作，而不会从源头处重新计算一遍该 RDD。</p>
+<h1 id="2-RDD-持久化级别"><a href="#2-RDD-持久化级别" class="headerlink" title="2. RDD 持久化级别"></a>2. RDD 持久化级别</h1><p>Spark 的持久化级别有如下几种：</p>
+<table>
+<thead>
+<tr>
+<th>持久化级别</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>MEMORY_ONLY</td>
+<td>将 RDD 数据保存在内存中，如果内存不够存放则数据有可能有部分不会进行持久化，在瑕疵对该 RDD 执行算子操作时，没有被持久化的数据需要从源头重新计算一遍。这是默认的持久化策略，使用 cache() 方法使用的就是这种持久化策略。</td>
+</tr>
+<tr>
+<td>MEMORY_AND_DISK</td>
+<td>优先尝试将数据保存在内存中，如果内存不够存放所有数据，会将数据写入到磁盘文件中，下次对该 RDD 执行算子操作时，持久化在内存和磁盘文件中的数据会被读取出来使用。</td>
+</tr>
+<tr>
+<td>MEMORY_ONLY_SER</td>
+<td>基本含义同 MEMORY_ONLY。唯一的区别是会将 RDD 数据进行序列化，将 RDD 的每个 partition 序列化为一个字节数据，这种方式更加节省内存，避免持久化的数据占用过多内存导致频繁 GC。</td>
+</tr>
+<tr>
+<td>MEMORY_AND_DISK_SER</td>
+<td>基本含义同 MEMORY_AND_DISK。唯一的区别是会将 RDD 数据进行序列化， RDD 的每个 partition 会被序列化成一个字节数据，种方式更加节省内存，避免持久化的数据占用过多内存导致频繁 GC。</td>
+</tr>
+<tr>
+<td>DISK_ONLY</td>
+<td>使用未序列化的 Java 对象格式，将数据全部写入磁盘文件中。</td>
+</tr>
+<tr>
+<td>OFF_HEAP</td>
+<td>将 RDD 以序列化的方式存在在 Alluxio 中（曾用名 Tachyon），而不是 Executor 的内存中，减少垃圾回收的压力，当 RDD 存储在 Alluxio 上时，Executors 的崩溃不会造成 RDD 数据的丢失。</td>
+</tr>
+<tr>
+<td>MEMORY_ONLY_2, MEMORY_ONLY_SER_2, MEMORY_AND_DISK_2, MEMORY_AND_DIST_SER_2, DISK_ONLY_2, 等等</td>
+<td>后缀有_2的持久化策略，表示将每个持久化的数据都复制一个副本，并保存在其他节点上，这种基于副本的持久化机制主要用于容错，如果单个节点持久化的数据丢失了，还可以从其他节点的副本上获取该 RDD 数据。</td>
+</tr>
+</tbody></table>
+<p>阅读 Spark 2.1.0 源码，RDD 持久化级别在 StorageLevel 类中有详细介绍，我们来详细看看。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：/org/apache/spark/storage/StorageLevel.scala</span></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment">* Various [[org.apache.spark.storage.StorageLevel]] defined and utility functions for creating</span></span><br><span class="line"><span class="comment">* new storage levels.</span></span><br><span class="line"><span class="comment">*/</span></span><br><span class="line"><span class="class"><span class="keyword">object</span> <span class="title">StorageLevel</span> </span>&#123;</span><br><span class="line">  <span class="keyword">val</span> <span class="type">NONE</span> = <span class="keyword">new</span> <span class="type">StorageLevel</span>(<span class="literal">false</span>, <span class="literal">false</span>, <span class="literal">false</span>, <span class="literal">false</span>)</span><br><span class="line">  <span class="keyword">val</span> <span class="type">DISK_ONLY</span> = <span class="keyword">new</span> <span class="type">StorageLevel</span>(<span class="literal">true</span>, <span class="literal">false</span>, <span class="literal">false</span>, <span class="literal">false</span>)</span><br><span class="line">  <span class="keyword">val</span> <span class="type">DISK_ONLY_2</span> = <span class="keyword">new</span> <span class="type">StorageLevel</span>(<span class="literal">true</span>, <span class="literal">false</span>, <span class="literal">false</span>, <span class="literal">false</span>, <span class="number">2</span>)</span><br><span class="line">  <span class="keyword">val</span> <span class="type">MEMORY_ONLY</span> = <span class="keyword">new</span> <span class="type">StorageLevel</span>(<span class="literal">false</span>, <span class="literal">true</span>, <span class="literal">false</span>, <span class="literal">true</span>)</span><br><span class="line">  <span class="keyword">val</span> <span class="type">MEMORY_ONLY_2</span> = <span class="keyword">new</span> <span class="type">StorageLevel</span>(<span class="literal">false</span>, <span class="literal">true</span>, <span class="literal">false</span>, <span class="literal">true</span>, <span class="number">2</span>)</span><br><span class="line">  <span class="keyword">val</span> <span class="type">MEMORY_ONLY_SER</span> = <span class="keyword">new</span> <span class="type">StorageLevel</span>(<span class="literal">false</span>, <span class="literal">true</span>, <span class="literal">false</span>, <span class="literal">false</span>)</span><br><span class="line">  <span class="keyword">val</span> <span class="type">MEMORY_ONLY_SER_2</span> = <span class="keyword">new</span> <span class="type">StorageLevel</span>(<span class="literal">false</span>, <span class="literal">true</span>, <span class="literal">false</span>, <span class="literal">false</span>, <span class="number">2</span>)</span><br><span class="line">  <span class="keyword">val</span> <span class="type">MEMORY_AND_DISK</span> = <span class="keyword">new</span> <span class="type">StorageLevel</span>(<span class="literal">true</span>, <span class="literal">true</span>, <span class="literal">false</span>, <span class="literal">true</span>)</span><br><span class="line">  <span class="keyword">val</span> <span class="type">MEMORY_AND_DISK_2</span> = <span class="keyword">new</span> <span class="type">StorageLevel</span>(<span class="literal">true</span>, <span class="literal">true</span>, <span class="literal">false</span>, <span class="literal">true</span>, <span class="number">2</span>)</span><br><span class="line">  <span class="keyword">val</span> <span class="type">MEMORY_AND_DISK_SER</span> = <span class="keyword">new</span> <span class="type">StorageLevel</span>(<span class="literal">true</span>, <span class="literal">true</span>, <span class="literal">false</span>, <span class="literal">false</span>)</span><br><span class="line">  <span class="keyword">val</span> <span class="type">MEMORY_AND_DISK_SER_2</span> = <span class="keyword">new</span> <span class="type">StorageLevel</span>(<span class="literal">true</span>, <span class="literal">true</span>, <span class="literal">false</span>, <span class="literal">false</span>, <span class="number">2</span>)</span><br><span class="line">  <span class="keyword">val</span> <span class="type">OFF_HEAP</span> = <span class="keyword">new</span> <span class="type">StorageLevel</span>(<span class="literal">true</span>, <span class="literal">true</span>, <span class="literal">true</span>, <span class="literal">false</span>, <span class="number">1</span>)</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+
+
+<p>这里列出了 12 种 RDD 缓存级别，每个缓存级别后面都 new 了一个 StorageLevel类的构造函数，什么意思呢？我么可以看看其构造函数。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/spark/storage/StorageLevel.scala</span></span><br><span class="line"><span class="class"><span class="keyword">class</span> <span class="title">StorageLevel</span> <span class="title">private</span>(<span class="params"></span></span></span><br><span class="line"><span class="params"><span class="class">  private var _useDisk: <span class="type">Boolean</span>,</span></span></span><br><span class="line"><span class="params"><span class="class">  private var _useMemory: <span class="type">Boolean</span>,</span></span></span><br><span class="line"><span class="params"><span class="class">  private var _useOffHeap: <span class="type">Boolean</span>,</span></span></span><br><span class="line"><span class="params"><span class="class">  private var _deserialized: <span class="type">Boolean</span>,</span></span></span><br><span class="line"><span class="params"><span class="class">  private var _replication: <span class="type">Int</span> = 1</span>)</span></span><br><span class="line">  <span class="keyword">extends</span> <span class="type">Externalizable</span> &#123;</span><br><span class="line"></span><br><span class="line"><span class="comment">// <span class="doctag">TODO:</span> Also add fields for caching priority, dataset ID, and flushing.</span></span><br><span class="line"><span class="keyword">private</span> <span class="function"><span class="keyword">def</span> <span class="title">this</span></span>(flags: <span class="type">Int</span>, replication: <span class="type">Int</span>) &#123;</span><br><span class="line">	<span class="keyword">this</span>((flags &amp; <span class="number">8</span>) != <span class="number">0</span>, (flags &amp; <span class="number">4</span>) != <span class="number">0</span>, (flags &amp; <span class="number">2</span>) != <span class="number">0</span>, (flags &amp; <span class="number">1</span>) != <span class="number">0</span>, replication)</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">this</span></span>() = <span class="keyword">this</span>(<span class="literal">false</span>, <span class="literal">true</span>, <span class="literal">false</span>, <span class="literal">false</span>) <span class="comment">// For deserialization</span></span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">useDisk</span></span>: <span class="type">Boolean</span> = _useDisk</span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">useMemory</span></span>: <span class="type">Boolean</span> = _useMemory</span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">useOffHeap</span></span>: <span class="type">Boolean</span> = _useOffHeap</span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">deserialized</span></span>: <span class="type">Boolean</span> = _deserialized</span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">replication</span></span>: <span class="type">Int</span> = _replication</span><br></pre></td></tr></table></figure>
+
+<p>StorageLevel类的主构造器包含了5个参数：</p>
+<ul>
+<li><p>useDisk：使用硬盘（外存）。</p>
+</li>
+<li><p>useMemory：使用内存。</p>
+</li>
+<li><p>useOffHeap：使用堆外内存，这是Java虚拟机里面的概念，堆外内存意味着把内存对象分配在Java虚拟机的堆以外的内存，这些内存直接受操作系统管理（而不是虚拟机）。这样做的结果就是能保持一个较小的堆，以减少垃圾收集对应用的影响。</p>
+</li>
+<li><p>deserialized：反序列化，其逆过程序列化（Serialization）是java提供的一种机制，将对象表示成一连串的字节；而反序列化就表示将字节恢复为对象的过程。序列化是对象永久化的一种机制，可以将对象及其属性保存起来，并能在反序列化后直接恢复这个对象。</p>
+</li>
+<li><p>replication：备份数（在多个节点上备份）。</p>
+</li>
+</ul>
+<p>理解了这 5 个参数，就不难理解不同缓存级别的含义了，比如 <code>val MEMORY_AND_DISK_SER_2 = new StorageLevel(true, true, false, false, 2)</code> 缓存，表示将 RDD 的数据持久化在硬盘以及内存中，对数据进行序列化存储，并且将每个持久化的数据都复制一份副本保存到其他节点。</p>
+<h1 id="3-持久化级别选择"><a href="#3-持久化级别选择" class="headerlink" title="3. 持久化级别选择"></a>3. 持久化级别选择</h1><p>Spark 提供了这么多中持久化策略，那在实际场景中应该如何使用呢？通常遵循的准则是，优先考虑内存，内存放不下就考虑序列化后放到内存中，尽量不要存储到磁盘中，因为一般 RDD 的重新计算要比从磁盘中读取更快，只有在需要更快的恢复时才使用备份级别（所有的存储级别都可以通过重新计算来提供全面的容错性，但是备份级别允许用于在 RDD 的备份上执行任务，而无须重新计算丢失的分区）。具体的选取方式如下：</p>
+<ul>
+<li><p>采用默认情况下性能最高的 MEMORY_ONLY。该持续化级别下，对 RDD 的后续算子操作，都是基于纯内存中的数据操作，不需要从磁盘文件中读取数据，性能很高，也不需要进行序列化与反序列化操作，避免了这部分开销。但要注意的是，如果 RDD 的数据比较多（比如几十亿条），直接用这种持久化级别可能会导致 JVM 的 OOM 内存溢出异常。</p>
+</li>
+<li><p>如果使用 MEMROY_ONLY 级别发生了内存溢出，建议尝试使用 MEMROY_ONLY_SER 级别。该级别会将 RDD 数据序列化后再保存到内存中，此时每个 partition 仅仅是一个字节数组，减少了对象数量，并降低内存占用，该级别比 MEMORY_ONLY 多出来的性能开销，主要就是序列化和反序列化的开销。同样，如果 RDD 数据过多仍然会导致 OOM 内存溢出异常。</p>
+</li>
+<li><p>如果纯内存级别都无法使用，则建议使用 MEMROY_AND_DISK_SER 策略，而不是 MEMORY_AND_DISK 策略。该策略会优先将数据缓存到内存中，内存缓存不下时才会写入磁盘。</p>
+</li>
+<li><p>通常不建议使用 DISK_ONLY 级别。因为完全基于磁盘文件进行数据的读写，会导致性能急剧下降，有时还不如重新计算一次该 RDD。</p>
+</li>
+<li><p>通常不建议使用后缀为_2的备份级别。因为该级别必须将所有的数据都复制一份副本，并发送到其他节点上，而数据复制和网络传输会导致较大的性能开销。除非是作业的高可用性能要求很高，否则不建议使用。</p>
+</li>
+<li><p>OFF_HEAP 级别一般使用得少，但优势也比较明显。该方式将 RDD 数据持久化到 Alluxio 而不是 Executor 内存中，可以避免 Executors 崩溃缓存数据丢失的情况。</p>
+</li>
+</ul>
+<h1 id="4-删除持久化数据"><a href="#4-删除持久化数据" class="headerlink" title="4. 删除持久化数据"></a>4. 删除持久化数据</h1><p>Spark 的机制可以自动监控各个节点上的缓存使用率，并以 LRU (Least Recently Used，近期最少使用）算法删除过时的缓存数据。当然，如果想手动删除一个 RDD 数据的缓存，而不是等待该 RDD 被 Spark 自动移除，可以使用 <code>RDD.unpersist()</code>方法。</p>
+<h1 id="5-RDD-cache和persist"><a href="#5-RDD-cache和persist" class="headerlink" title="5. RDD cache和persist"></a>5. RDD cache和persist</h1><p>我们先来看一个 persist 的示例。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// cache 使用示例：</span></span><br><span class="line">val rdd1 = sc.textFile(<span class="string">&quot;hdfs://nameservice/data/README.md&quot;</span>).cache()</span><br><span class="line">rdd1.map(...)</span><br><span class="line">rdd1.reduce(...)</span><br><span class="line"></span><br><span class="line"><span class="comment">// persist 使用示例</span></span><br><span class="line">val rdd1 = sc.textFile(<span class="string">&quot;hdfs://nameservice/data/README.md&quot;</span>).persist(StorageLevel.MEMORY_AND_DISK_SER)</span><br><span class="line">rdd1.map(...)</span><br><span class="line">rdd1.reduce(...)</span><br></pre></td></tr></table></figure>
+
+<p>唯一可以看出的是 persist() 持久化是可以手动指定持久化类型的，而 cache() 无须指定。那它们之间到底有什么区别呢？</p>
+<p>通过阅读 Spark 2.1.0 源码，可以看到 cache() 方法调用了无参的 persist() 方法。想知道两者的区别，还需要进一步看看 persist() 方法逻辑。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/spark/rdd/RDD.scala</span></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment">* Persist this RDD with the default storage level (`MEMORY_ONLY`).</span></span><br><span class="line"><span class="comment">*/</span></span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">cache</span></span>(): <span class="keyword">this</span>.<span class="keyword">type</span> = persist()</span><br></pre></td></tr></table></figure>
+
+<p>可以看到 persist() 方法调用了 persist(StorageLevel.MEMORY_ONLY) 方法，即默认缓存方式采用 MEMORY_ONLY 级别。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/spark/rdd/RDD.scala</span></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment">* Persist this RDD with the default storage level (`MEMORY_ONLY`).</span></span><br><span class="line"><span class="comment">*/</span></span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">persist</span></span>(): <span class="keyword">this</span>.<span class="keyword">type</span> = persist(<span class="type">StorageLevel</span>.<span class="type">MEMORY_ONLY</span>)</span><br></pre></td></tr></table></figure>
+
+<p>继续往下看，persist() 方法有一个 StorageLevel 类型的参数，该参数表示 RDD 的缓存级别。至此，也就能看出 cache 和 persist 的区别了：即 cache 只有一个默认的缓存级别 MEMORY_ONLY，而 persist 可以根据情况设置其他的缓存级别。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/spark/rdd/RDD.scala</span></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment">* Mark this RDD for persisting using the specified level.</span></span><br><span class="line"><span class="comment">*</span></span><br><span class="line"><span class="comment">* @param newLevel the target storage level</span></span><br><span class="line"><span class="comment">* @param allowOverride whether to override any existing level with the new one</span></span><br><span class="line"><span class="comment">*/</span></span><br><span class="line"><span class="keyword">private</span> <span class="function"><span class="keyword">def</span> <span class="title">persist</span></span>(newLevel: <span class="type">StorageLevel</span>, allowOverride: <span class="type">Boolean</span>): <span class="keyword">this</span>.<span class="keyword">type</span> = &#123;</span><br><span class="line"><span class="comment">// <span class="doctag">TODO:</span> Handle changes of StorageLevel</span></span><br><span class="line">  <span class="keyword">if</span> (storageLevel != <span class="type">StorageLevel</span>.<span class="type">NONE</span> &amp;&amp; newLevel != storageLevel &amp;&amp; !allowOverride) &#123;</span><br><span class="line">    <span class="keyword">throw</span> <span class="keyword">new</span> <span class="type">UnsupportedOperationException</span>(</span><br><span class="line">    <span class="string">&quot;Cannot change storage level of an RDD after it was already assigned a level&quot;</span>)</span><br><span class="line">  &#125;</span><br><span class="line">  <span class="comment">// If this is the first time this RDD is marked for persisting, register it</span></span><br><span class="line">  <span class="comment">// with the SparkContext for cleanups and accounting. Do this only once.</span></span><br><span class="line">  <span class="keyword">if</span> (storageLevel == <span class="type">StorageLevel</span>.<span class="type">NONE</span>) &#123;</span><br><span class="line">    sc.cleaner.foreach(_.registerRDDForCleanup(<span class="keyword">this</span>))</span><br><span class="line">    sc.persistRDD(<span class="keyword">this</span>)</span><br><span class="line">  &#125;</span><br><span class="line">	storageLevel = newLevel</span><br><span class="line">	<span class="keyword">this</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h1 id="6-RDD-的-checkpoint"><a href="#6-RDD-的-checkpoint" class="headerlink" title="6. RDD 的 checkpoint"></a>6. RDD 的 checkpoint</h1><p>把数据通过 cache 或 persist 持久化到内存或磁盘中，虽然是快速的但却不是最可靠的，checkpoint 机制的产生就是为了更加可靠地持久化数据以复用 RDD 计算数据，通常针对整个 RDD 计算链路中特别需要数据持久化的缓解，启用 checkpoint 机制来确保高容错和高可用性。</p>
+<p>可以通过调用 SparkContext.setCheckpointDir() 方法来指定 checkpoint 是持久化的 RDD 数据的存放位置，这里可以存在本地或 HDFS 中（生产环境通常是放在 HDFS 上，借助 HDFS 本身的高容错和高可靠的特性完成数据的持久化），同时为了提高效率，可以指定多个目录。</p>
+<p>需要说明的是，<strong>checkpoint 和 persist 一样是惰性执行的，在对某个 RDD 标记了需要 checkpoint 后，并不会立即执行，只有在后续有 Action 触发 Job 从而导致该 RDD 的计算，且在这个 Job 执行完成后，才会从后往前回溯找到标记了 checkpoint 的 RDD，然后重新启动一个 Job 来执行具体的 checkpoint 操作，所以一般都会对需要进行 checkpoint 的 RDD 先进行 persist 标记，从而把该 RDD 的计算结果持久化到内存或者磁盘上，以备 checkpoint 复用</strong>。</p>
+<p>下面是 checkpoint 使用的一个示例：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 配置 checkpointDir</span></span><br><span class="line">sc.setCheckpointDir(<span class="string">&quot;hdfs://nameservice/spark/checkpoint&quot;</span>)</span><br><span class="line">val rdd1 = sc.textFile(<span class="string">&quot;hdfs://nameservice/data/README.md&quot;</span>).cache()</span><br><span class="line"><span class="comment">// 对 rdd1 标记 checkpoint</span></span><br><span class="line">rdd1.checkpoint()</span><br><span class="line"><span class="comment">// action 触发了 Job 才能导致 checkpoint 的真正执行</span></span><br><span class="line">rdd1.count()</span><br></pre></td></tr></table></figure>
+
+<h1 id="7-DataSet-的cache和persist"><a href="#7-DataSet-的cache和persist" class="headerlink" title="7. DataSet 的cache和persist"></a>7. DataSet 的cache和persist</h1><p>阅读源码中无意中看到 DataSet 也支持 cache 和 persist 持久化方式，和 RDD 的持久化还是不太一样，我们来看看代码。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/spark/sql/Dataset.scala</span></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment">* Persist this Dataset with the default storage level (`MEMORY_AND_DISK`).</span></span><br><span class="line"><span class="comment">*</span></span><br><span class="line"><span class="comment">* @group basic</span></span><br><span class="line"><span class="comment">* @since 1.6.0</span></span><br><span class="line"><span class="comment">*/</span></span><br><span class="line"><span class="comment">// DataSet 的 cache 持久化调用</span></span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">cache</span></span>(): <span class="keyword">this</span>.<span class="keyword">type</span> = persist()</span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment">* Persist this Dataset with the default storage level (`MEMORY_AND_DISK`).</span></span><br><span class="line"><span class="comment">*</span></span><br><span class="line"><span class="comment">* @group basic</span></span><br><span class="line"><span class="comment">* @since 1.6.0</span></span><br><span class="line"><span class="comment">*/</span></span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">persist</span></span>(): <span class="keyword">this</span>.<span class="keyword">type</span> = &#123;</span><br><span class="line">  sparkSession.sharedState.cacheManager.cacheQuery(<span class="keyword">this</span>)</span><br><span class="line">  <span class="keyword">this</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 位置：org/apache/spark/sql/Dataset.scala</span></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment">* Persist this Dataset with the given storage level.</span></span><br><span class="line"><span class="comment">* @param newLevel One of: `MEMORY_ONLY`, `MEMORY_AND_DISK`, `MEMORY_ONLY_SER`,</span></span><br><span class="line"><span class="comment">* `MEMORY_AND_DISK_SER`, `DISK_ONLY`, `MEMORY_ONLY_2`,</span></span><br><span class="line"><span class="comment">* `MEMORY_AND_DISK_2`, etc.</span></span><br><span class="line"><span class="comment">*</span></span><br><span class="line"><span class="comment">* @group basic</span></span><br><span class="line"><span class="comment">* @since 1.6.0</span></span><br><span class="line"><span class="comment">*/</span></span><br><span class="line"><span class="comment">// DataSet 的 persist 持久化调用</span></span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">persist</span></span>(newLevel: <span class="type">StorageLevel</span>): <span class="keyword">this</span>.<span class="keyword">type</span> = &#123;</span><br><span class="line">  sparkSession.sharedState.cacheManager.cacheQuery(<span class="keyword">this</span>, <span class="type">None</span>, newLevel)</span><br><span class="line">  <span class="keyword">this</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 位置：org/apache/spark/sql/execution/CacheManager.scala</span></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment">* Caches the data produced by the logical representation of the given [[Dataset]].</span></span><br><span class="line"><span class="comment">* Unlike `RDD.cache()`, the default storage level is set to be `MEMORY_AND_DISK` because</span></span><br><span class="line"><span class="comment">* recomputing the in-memory columnar representation of the underlying table is expensive.</span></span><br><span class="line"><span class="comment">*/</span></span><br><span class="line"><span class="comment">// cache 和 persist 持久化调用的方法</span></span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">cacheQuery</span></span>(</span><br><span class="line">  query: <span class="type">Dataset</span>[_],</span><br><span class="line">  tableName: <span class="type">Option</span>[<span class="type">String</span>] = <span class="type">None</span>,</span><br><span class="line">  storageLevel: <span class="type">StorageLevel</span> = <span class="type">MEMORY_AND_DISK</span>): <span class="type">Unit</span> = writeLock</span><br></pre></td></tr></table></figure>
+
+<p>通过源码看到 cache() 调用的是无参的 persist() 方法，而 persist 调用 cacheQuery 方法，虽然 cache 和 persist 两者最终调用都是 cacheQuery 方法，但 cache 是采用默认的持久化级别 <code>MEMORY_ADN_DISK</code>，而 persist 则是用户自定义，这里默认的持久化持久和 RDD 是不一样的。</p>
+<h1 id="参考连接"><a href="#参考连接" class="headerlink" title="参考连接"></a>参考连接</h1><ol>
+<li><p><a target="_blank" rel="noopener" href="https://blog.csdn.net/houmou/article/details/52491419">每次进步一点点——spark中cache和persist的区别</a></p>
+</li>
+<li><p><a target="_blank" rel="noopener" href="https://dongkelun.com/2018/06/03/sparkCacheAndPersist/">Spark 持久化（cache和persist的区别）</a></p>
+</li>
+<li><p><a target="_blank" rel="noopener" href="https://blog.csdn.net/qq_27639777/article/details/82319560">Spark Cache的几点思考</a></p>
+</li>
+</ol>
+
+    </div>
+
+    
+    
+    
+
+    <div>
+      
+      <div>
+	 
+		<div style="text-align:center;color:#bfbfbf;font-size:16px;"> 
+			<span>-------- 本文结束 </span> <i class="fa fa-paw"></i> <span> 感谢阅读 --------</span>
+		</div> 
+	
+</div>
+      
+    </div>
+        <div class="reward-container">
+  <div></div>
+  <button onclick="var qr = document.getElementById('qr'); qr.style.display = (qr.style.display === 'none') ? 'block' : 'none';">
+    请我喝杯咖啡~
+  </button>
+  <div id="qr" style="display: none;">
+      
+      <div style="display: inline-block;">
+        <img src="/images/wechatpay.png" alt="笨小康 微信打赏">
+        <p>微信打赏</p>
+      </div>
+      
+      <div style="display: inline-block;">
+        <img src="/images/alipay.png" alt="笨小康 支付宝打赏">
+        <p>支付宝打赏</p>
+      </div>
+
+  </div>
+</div>
+
+
+      <footer class="post-footer">
+          <div class="post-tags">
+              <a href="/tags/Spark/" rel="tag"><i class="fa fa-tag"></i> Spark</a>
+              <a href="/tags/Spark%E6%BA%90%E7%A0%81/" rel="tag"><i class="fa fa-tag"></i> Spark源码</a>
+              <a href="/tags/Spark%E5%8E%9F%E7%90%86/" rel="tag"><i class="fa fa-tag"></i> Spark原理</a>
+          </div>
+
+        
+
+
+        
+    <div class="post-nav">
+      <div class="post-nav-item">
+    <a href="/2021/11/28/Spark-Listener%E8%AE%BE%E8%AE%A1%E6%80%9D%E6%83%B3%E5%8F%8A%E6%BA%90%E7%A0%81%E5%BC%95%E8%AF%BB/" rel="prev" title="Spark Listener设计思想及源码引读">
+      <i class="fa fa-chevron-left"></i> Spark Listener设计思想及源码引读
+    </a></div>
+      <div class="post-nav-item">
+    <a href="/2021/12/10/Spark%E5%86%85%E5%AD%98%E6%A8%A1%E5%9E%8B%E8%AF%A6%E8%A7%A3/" rel="next" title="Spark内存模型详解">
+      Spark内存模型详解 <i class="fa fa-chevron-right"></i>
+    </a></div>
+    </div>
+      </footer>
+    
+  </article>
+  
+  
+  
+
+
+
+
+          </div>
+          
+
+<script>
+  window.addEventListener('tabs:register', () => {
+    let { activeClass } = CONFIG.comments;
+    if (CONFIG.comments.storage) {
+      activeClass = localStorage.getItem('comments_active') || activeClass;
+    }
+    if (activeClass) {
+      let activeTab = document.querySelector(`a[href="#comment-${activeClass}"]`);
+      if (activeTab) {
+        activeTab.click();
+      }
+    }
+  });
+  if (CONFIG.comments.storage) {
+    window.addEventListener('tabs:click', event => {
+      if (!event.target.matches('.tabs-comment .tab-content .tab-pane')) return;
+      let commentClass = event.target.classList[1];
+      localStorage.setItem('comments_active', commentClass);
+    });
+  }
+</script>
+
+        </div>
+          
+  
+  <div class="toggle sidebar-toggle">
+    <span class="toggle-line toggle-line-first"></span>
+    <span class="toggle-line toggle-line-middle"></span>
+    <span class="toggle-line toggle-line-last"></span>
+  </div>
+
+  <aside class="sidebar">
+    <div class="sidebar-inner">
+
+      <ul class="sidebar-nav motion-element">
+        <li class="sidebar-nav-toc">
+          文章目录
+        </li>
+        <li class="sidebar-nav-overview">
+          站点概览
+        </li>
+      </ul>
+
+      <!--noindex-->
+      <div class="post-toc-wrap sidebar-panel">
+          <div class="post-toc motion-element"><ol class="nav"><li class="nav-item nav-level-1"><a class="nav-link" href="#1-RDD-%E6%8C%81%E4%B9%85%E5%8C%96"><span class="nav-text">1. RDD 持久化</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#2-RDD-%E6%8C%81%E4%B9%85%E5%8C%96%E7%BA%A7%E5%88%AB"><span class="nav-text">2. RDD 持久化级别</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#3-%E6%8C%81%E4%B9%85%E5%8C%96%E7%BA%A7%E5%88%AB%E9%80%89%E6%8B%A9"><span class="nav-text">3. 持久化级别选择</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#4-%E5%88%A0%E9%99%A4%E6%8C%81%E4%B9%85%E5%8C%96%E6%95%B0%E6%8D%AE"><span class="nav-text">4. 删除持久化数据</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#5-RDD-cache%E5%92%8Cpersist"><span class="nav-text">5. RDD cache和persist</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#6-RDD-%E7%9A%84-checkpoint"><span class="nav-text">6. RDD 的 checkpoint</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#7-DataSet-%E7%9A%84cache%E5%92%8Cpersist"><span class="nav-text">7. DataSet 的cache和persist</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#%E5%8F%82%E8%80%83%E8%BF%9E%E6%8E%A5"><span class="nav-text">参考连接</span></a></li></ol></div>
+      </div>
+      <!--/noindex-->
+
+      <div class="site-overview-wrap sidebar-panel">
+        <div class="site-author motion-element" itemprop="author" itemscope itemtype="http://schema.org/Person">
+  <p class="site-author-name" itemprop="name">笨小康</p>
+  <div class="site-description" itemprop="description"></div>
+</div>
+<div class="site-state-wrap motion-element">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+          <a href="/archives/">
+        
+          <span class="site-state-item-count">21</span>
+          <span class="site-state-item-name">日志</span>
+        </a>
+      </div>
+      <div class="site-state-item site-state-categories">
+            <a href="/categories/">
+          
+        <span class="site-state-item-count">4</span>
+        <span class="site-state-item-name">分类</span></a>
+      </div>
+      <div class="site-state-item site-state-tags">
+            <a href="/tags/">
+          
+        <span class="site-state-item-count">9</span>
+        <span class="site-state-item-name">标签</span></a>
+      </div>
+  </nav>
+</div>
+
+
+
+      </div>
+
+    </div>
+  </aside>
+  <div id="sidebar-dimmer"></div>
+
+
+      </div>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        
+
+        
+
+<div class="copyright">
+  
+  &copy; 
+  <span itemprop="copyrightYear">2021</span>
+  <span class="with-love">
+    <i class="fa fa-heart"></i>
+  </span>
+  <span class="author" itemprop="copyrightHolder">笨小康</span>
+</div>
+
+        
+
+
+
+
+
+
+
+
+      </div>
+    </footer>
+  </div>
+
+  
+  <script src="/lib/anime.min.js"></script>
+  <script src="/lib/velocity/velocity.min.js"></script>
+  <script src="/lib/velocity/velocity.ui.min.js"></script>
+
+<script src="/js/utils.js"></script>
+
+<script src="/js/motion.js"></script>
+
+
+<script src="/js/schemes/pisces.js"></script>
+
+
+<script src="/js/next-boot.js"></script>
+
+
+
+
+  
+
+
+
+
+  
+<script src="/js/local-search.js"></script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+  
+
+</body>
+</html>

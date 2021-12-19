@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=2">
+<meta name="theme-color" content="#222">
+<meta name="generator" content="Hexo 5.4.0">
+  <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon-next.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/images/favicon-32x32-next.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/favicon-16x16-next.png">
+  <link rel="mask-icon" href="/images/logo.svg" color="#222">
+
+<link rel="stylesheet" href="/css/main.css">
+
+<link rel="stylesheet" href="//fonts.googleapis.com/css?family=Lato:300,300italic,400,400italic,700,700italic&display=swap&subset=latin,latin-ext">
+<link rel="stylesheet" href="/lib/font-awesome/css/all.min.css">
+
+<script id="hexo-configurations">
+    var NexT = window.NexT || {};
+    var CONFIG = {"hostname":"yoursite.com","root":"/","scheme":"Pisces","version":"7.8.0","exturl":false,"sidebar":{"position":"left","display":"post","padding":18,"offset":12,"onmobile":false},"copycode":{"enable":true,"show_result":true,"style":"default"},"back2top":{"enable":true,"sidebar":false,"scrollpercent":false},"bookmark":{"enable":false,"color":"#222","save":"auto"},"fancybox":false,"mediumzoom":false,"lazyload":false,"pangu":false,"comments":{"style":"tabs","active":null,"storage":true,"lazyload":false,"nav":null},"algolia":{"hits":{"per_page":10},"labels":{"input_placeholder":"Search for Posts","hits_empty":"We didn't find any results for the search: ${query}","hits_stats":"${hits} results found in ${time} ms"}},"localsearch":{"enable":true,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false},"motion":{"enable":true,"async":false,"transition":{"post_block":"fadeIn","post_header":"slideDownIn","post_body":"slideDownIn","coll_header":"slideLeftIn","sidebar":"slideUpIn"}},"path":"search.xml"};
+  </script>
+
+  <meta name="description" content="导读：Spark 能够有效的利用内存并进行分布式计算，其内存管理模块在整个系统中扮演着非常重要的角色。为了更好地理解 Spark 作业的内存分布，下文主要介绍的内存模型指 Executor 端的内存模型，Driver 端的内存模型本文不做介绍，理解 Spark 内存使用有助于对问题内存使用进行分析，在出现各种内存问题时，能够找到哪块内存区域出现问题。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Spark内存模型详解">
+<meta property="og:url" content="http://yoursite.com/2021/12/10/Spark%E5%86%85%E5%AD%98%E6%A8%A1%E5%9E%8B%E8%AF%A6%E8%A7%A3/index.html">
+<meta property="og:site_name" content="笨小康的博客">
+<meta property="og:description" content="导读：Spark 能够有效的利用内存并进行分布式计算，其内存管理模块在整个系统中扮演着非常重要的角色。为了更好地理解 Spark 作业的内存分布，下文主要介绍的内存模型指 Executor 端的内存模型，Driver 端的内存模型本文不做介绍，理解 Spark 内存使用有助于对问题内存使用进行分析，在出现各种内存问题时，能够找到哪块内存区域出现问题。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/12/19/0ceb92f23876fe378a6b9893fa2bf7c3-1630393018587-a690c541-f7ea-48e2-9fa7-caccae97db08-a2b138.png">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/12/19/67dbf148dfcbac58f8c2387425926e06-1630393086200-dd0e1169-90ab-4144-aa6a-23a110f4dbe4-20211219185044179-c9d82b.png">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/12/19/e4d5ae88116aa71d3485c29ea320803e-1630393132830-bdb0abd2-53f1-4fe4-8f85-cf5345243e7f-c20b06.png">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/12/19/dcd02d6e382b8a11f227f3e3c7323846-1630393153185-c1fa0f82-ec1c-469c-8c76-e607ece26961-20211219185121310-e4684b.png">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/12/19/6bcf4cfc9a71d27cb91407220c2beeed-image-20211219184847518-0da8d2.png">
+<meta property="article:published_time" content="2021-12-10T10:43:50.000Z">
+<meta property="article:modified_time" content="2021-12-19T11:25:25.424Z">
+<meta property="article:author" content="笨小康">
+<meta property="article:tag" content="Spark">
+<meta property="article:tag" content="Spark原理">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/12/19/0ceb92f23876fe378a6b9893fa2bf7c3-1630393018587-a690c541-f7ea-48e2-9fa7-caccae97db08-a2b138.png">
+
+<link rel="canonical" href="http://yoursite.com/2021/12/10/Spark%E5%86%85%E5%AD%98%E6%A8%A1%E5%9E%8B%E8%AF%A6%E8%A7%A3/">
+
+
+<script id="page-configurations">
+  // https://hexo.io/docs/variables.html
+  CONFIG.page = {
+    sidebar: "",
+    isHome : false,
+    isPost : true,
+    lang   : 'zh-CN'
+  };
+</script>
+
+  <title>Spark内存模型详解 | 笨小康的博客</title>
+  
+
+
+
+
+
+
+  <noscript>
+  <style>
+  .use-motion .brand,
+  .use-motion .menu-item,
+  .sidebar-inner,
+  .use-motion .post-block,
+  .use-motion .pagination,
+  .use-motion .comments,
+  .use-motion .post-header,
+  .use-motion .post-body,
+  .use-motion .collection-header { opacity: initial; }
+
+  .use-motion .site-title,
+  .use-motion .site-subtitle {
+    opacity: initial;
+    top: initial;
+  }
+
+  .use-motion .logo-line-before i { left: initial; }
+  .use-motion .logo-line-after i { right: initial; }
+  </style>
+</noscript>
+
+</head>
+
+<body itemscope itemtype="http://schema.org/WebPage">
+  <div class="container use-motion">
+    <div class="headband"></div>
+
+    <header class="header" itemscope itemtype="http://schema.org/WPHeader">
+      <div class="header-inner"><div class="site-brand-container">
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="切换导航栏">
+      <span class="toggle-line toggle-line-first"></span>
+      <span class="toggle-line toggle-line-middle"></span>
+      <span class="toggle-line toggle-line-last"></span>
+    </div>
+  </div>
+
+  <div class="site-meta">
+
+    <a href="/" class="brand" rel="start">
+      <span class="logo-line-before"><i></i></span>
+      <h1 class="site-title">笨小康的博客</h1>
+      <span class="logo-line-after"><i></i></span>
+    </a>
+      <p class="site-subtitle" itemprop="description">星辰大海, 如期而至</p>
+  </div>
+
+  <div class="site-nav-right">
+    <div class="toggle popup-trigger">
+        <i class="fa fa-search fa-fw fa-lg"></i>
+    </div>
+  </div>
+</div>
+
+
+
+
+<nav class="site-nav">
+  <ul id="menu" class="main-menu menu">
+        <li class="menu-item menu-item-home">
+
+    <a href="/" rel="section"><i class="fa fa-home fa-fw"></i>首页</a>
+
+  </li>
+        <li class="menu-item menu-item-archives">
+
+    <a href="/archives/" rel="section"><i class="fa fa-archive fa-fw"></i>归档</a>
+
+  </li>
+        <li class="menu-item menu-item-categories">
+
+    <a href="/categories/" rel="section"><i class="fa fa-th fa-fw"></i>分类</a>
+
+  </li>
+        <li class="menu-item menu-item-tags">
+
+    <a href="/tags/" rel="section"><i class="fa fa-tags fa-fw"></i>标签云</a>
+
+  </li>
+        <li class="menu-item menu-item-flomo">
+
+    <a href="/categories/flomo/" rel="section"><i class="fa fa-lightbulb fa-fw"></i>随想录</a>
+
+  </li>
+        <li class="menu-item menu-item-about">
+
+    <a href="/about/" rel="section"><i class="fa fa-user fa-fw"></i>关于我</a>
+
+  </li>
+      <li class="menu-item menu-item-search">
+        <a role="button" class="popup-trigger"><i class="fa fa-search fa-fw"></i>搜文章
+        </a>
+      </li>
+  </ul>
+</nav>
+
+
+
+  <div class="search-pop-overlay">
+    <div class="popup search-popup">
+        <div class="search-header">
+  <span class="search-icon">
+    <i class="fa fa-search"></i>
+  </span>
+  <div class="search-input-container">
+    <input autocomplete="off" autocapitalize="off"
+           placeholder="搜索..." spellcheck="false"
+           type="search" class="search-input">
+  </div>
+  <span class="popup-btn-close">
+    <i class="fa fa-times-circle"></i>
+  </span>
+</div>
+<div id="search-result">
+  <div id="no-result">
+    <i class="fa fa-spinner fa-pulse fa-5x fa-fw"></i>
+  </div>
+</div>
+
+    </div>
+  </div>
+
+</div>
+    </header>
+
+    
+  <div class="back-to-top">
+    <i class="fa fa-arrow-up"></i>
+    <span>0%</span>
+  </div>
+  <div class="reading-progress-bar"></div>
+
+
+    <main class="main">
+      <div class="main-inner">
+        <div class="content-wrap">
+          
+
+          <div class="content post posts-expand">
+            
+
+    
+  
+  
+  <article itemscope itemtype="http://schema.org/Article" class="post-block" lang="zh-CN">
+    <link itemprop="mainEntityOfPage" href="http://yoursite.com/2021/12/10/Spark%E5%86%85%E5%AD%98%E6%A8%A1%E5%9E%8B%E8%AF%A6%E8%A7%A3/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/images/avatar.gif">
+      <meta itemprop="name" content="笨小康">
+      <meta itemprop="description" content="">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="笨小康的博客">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          Spark内存模型详解
+        </h1>
+
+        <div class="post-meta">
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-calendar"></i>
+              </span>
+              <span class="post-meta-item-text">发表于</span>
+
+              <time title="创建时间：2021-12-10 18:43:50" itemprop="dateCreated datePublished" datetime="2021-12-10T18:43:50+08:00">2021-12-10</time>
+            </span>
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-folder"></i>
+              </span>
+              <span class="post-meta-item-text">分类于</span>
+                <span itemprop="about" itemscope itemtype="http://schema.org/Thing">
+                  <a href="/categories/Spark/" itemprop="url" rel="index"><span itemprop="name">Spark</span></a>
+                </span>
+            </span>
+
+          
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody">
+
+      
+        <blockquote>
+<p>导读：Spark 能够有效的利用内存并进行分布式计算，其内存管理模块在整个系统中扮演着非常重要的角色。为了更好地理解 Spark 作业的内存分布，下文主要介绍的内存模型指 Executor 端的内存模型，Driver 端的内存模型本文不做介绍，理解 Spark 内存使用有助于对问题内存使用进行分析，在出现各种内存问题时，能够找到哪块内存区域出现问题。</p>
+</blockquote>
+<h1 id="1-Spark-内存介绍"><a href="#1-Spark-内存介绍" class="headerlink" title="1. Spark 内存介绍"></a>1. Spark 内存介绍</h1><p>在执行 Spark 的应用程序时，Spark 集群会启动 Driver 和 Executor 两种JVM进程。</p>
+<p>Driver 程序主要负责：</p>
+<ul>
+<li><p>创建 Spark上下文；</p>
+</li>
+<li><p>提交 Spark作业（Job）并将 Job 转化为计算任务（Task）交给 Executor 计算；</p>
+</li>
+<li><p>协调各个 Executor 进程间任务调度。</p>
+</li>
+</ul>
+<p>Executor 程序主要负责：</p>
+<ul>
+<li>在工作节点上执行具体的计算任务（Task），并将计算结果返回给 Driver；</li>
+<li>为需要持久化的 RDD 提供存储功能。</li>
+</ul>
+<p>由于 Driver 的内存管理相对来说较为简单，本文主要对 Executor 的内存管理进行分析，下文中的 Spark 内存均特指 Executor 的内存。</p>
+<h1 id="2-Executor内存管理"><a href="#2-Executor内存管理" class="headerlink" title="2. Executor内存管理"></a><strong>2. Executor内存管理</strong></h1><p>Executor 进程作为一个 JVM 进程，其内存管理建立在 JVM 的内存管理之上，整个大致包含两种方式：堆内内存和堆外内存。</p>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/12/19/0ceb92f23876fe378a6b9893fa2bf7c3-1630393018587-a690c541-f7ea-48e2-9fa7-caccae97db08-a2b138.png" alt="img"></p>
+<center>堆内和堆外内存示意图</center>
+
+<p><strong>一个 Executor 当中的所有 Task 是共享堆内内存的。一个 Work 中的多个 Executor 中的多个 Task 是共享堆外内存的。</strong>注意：默认的 Spark 是开启堆内内存的，配置参数：–executor-memory</p>
+<p>但是默认的堆外内存是不开启的：</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">spark.memory.offHeap.enabled=true  # 开启堆外内存</span><br><span class="line">spark.memory.offHeap.size =1024    # 分配堆外内存的大小。</span><br></pre></td></tr></table></figure>
+
+<h2 id="2-1-堆内内存"><a href="#2-1-堆内内存" class="headerlink" title="2.1 堆内内存"></a>2.1 堆内内存</h2><p>堆内内存大小，是指 JVM 堆的内存大小，由 Spark 程序启动时的 -executor-memory 或 spark.executor.memory 参数配置。那 Spark 是如何管理堆内内存呢？Spark 对堆内内存的管理是一种逻辑上的“规划式”的管理，因为对象实例占用内存的申请和释放都由 JVM 完成，Spark 只能在申请后和释放前记录这些内存，我们来看看申请内存和释放内存的具体流程：</p>
+<p><strong>申请内存：</strong></p>
+<ol>
+<li>Spark 在代码中 new 一个实例对象。</li>
+<li>JVM 从堆内内存分配空间，创建对象并返回对象饮用。</li>
+<li>Spark 保存该对象的引用，记录该对象占用的内存。</li>
+</ol>
+<p><strong>释放内存：</strong></p>
+<ol>
+<li>Spark 记录该对象释放的内存，删除该对象的引用。</li>
+<li>等待 JVM 的垃圾回收机制释放该对象占用的堆内内存。</li>
+</ol>
+<p>Spark 内存管理分为静态内存管理和统一内存管理，在 Spark 1.6 之前是采用的静态内存，之后的版本都是采用统一内存管理，与静态内存管理的区别在于 Storeage 内存和 Execution 内存共享统一块空间，可以动态占用对方的空闲区域。</p>
+<p>本文主要介绍统一内存管理。如图，可以看出堆内内存大致可以分为以下四个模块：<br><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/12/19/67dbf148dfcbac58f8c2387425926e06-1630393086200-dd0e1169-90ab-4144-aa6a-23a110f4dbe4-20211219185044179-c9d82b.png" alt="img"></p>
+<center>统一内存管理图示—堆内</center>
+
+<ul>
+<li><p><strong>Storage 内存：</strong>主要用于存储 Spark 的 cache 数据，例如 RDD 的 cache，Broadcast 变量，Unroll 数据等。需要注意的是，unrolled 的数据如果内存不够，会存储在 driver 端。</p>
+</li>
+<li><p><strong>Execution 内存：</strong>用于存储 Spark task 执行过程中需要的对象，如 Shuffle、Join、Sort、Aggregation等计算过程中的临时数据。</p>
+</li>
+<li><p><strong>User 内存：</strong>分配 Spark Memory 剩余的内存，用户可以根据需要使用，可以存储 RDD transformations 需要的数据结构。</p>
+</li>
+<li><p><strong>Reserved 内存：</strong>这部分内存是预留给系统用的，固定不变。</p>
+</li>
+</ul>
+<h2 id="2-2-堆外内存"><a href="#2-2-堆外内存" class="headerlink" title="2.2 堆外内存"></a>2.2 堆外内存</h2><p>在默认情况下堆外内存并不启用，可通过配置 spark.memory.offHeap.enabled 参数启用，并由spark.memory.offHeap.size 参数设定堆外空间的大小。除了没有 other 空间，堆外内存与堆内内存的划分方式相同如下图3所示(以统一内存管理机制为例)，所有运行中的并发任务共享存储内存和执行内存。</p>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/12/19/e4d5ae88116aa71d3485c29ea320803e-1630393132830-bdb0abd2-53f1-4fe4-8f85-cf5345243e7f-c20b06.png" alt="img"></p>
+<center>统一内存管理图示—堆外</center>
+
+<h1 id="3-统一内存动态占用机制"><a href="#3-统一内存动态占用机制" class="headerlink" title="3. 统一内存动态占用机制"></a>3. 统一内存动态占用机制</h1><p>Spark 1.6 之后引入的统一内存管理机制，存储内存（Storeage Memory）和执行内存（Execution Memory）可以动态占用对方的空闲区域（如下图），在设定基本的的存储内存和执行内存区域（由 spark.memory.storageFraction 参数控制）后，便确定了双方各自拥有的空间容量。统一内存管理的核心在内存区域的动态占用机制，其占用规则如下：</p>
+<ol>
+<li><p>双方空间都不足时，则存储到硬盘；如己方空间不足而对方空余时，可借用对方的空间；（存储空间不足是指不足以放下一个完整的 Block）。</p>
+</li>
+<li><p>执行内存的空间被对方占用后，可让对方将占用的部分存储转存到硬盘，然后“归还”借用的空间。</p>
+</li>
+<li><p>存储内存的空间被对方占用后，无法让对方“归还”，因为需要考虑到 Shuffle 过程中很多因素，实现起来较为复杂。</p>
+</li>
+</ol>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/12/19/dcd02d6e382b8a11f227f3e3c7323846-1630393153185-c1fa0f82-ec1c-469c-8c76-e607ece26961-20211219185121310-e4684b.png" alt="img"></p>
+<center>动态占用机制示意图</center>
+
+<h1 id="4-Spark内存参数"><a href="#4-Spark内存参数" class="headerlink" title="4. Spark内存参数"></a>4. Spark内存参数</h1><h2 id="4-1-统一内存管理参数"><a href="#4-1-统一内存管理参数" class="headerlink" title="4.1 统一内存管理参数"></a>4.1 统一内存管理参数</h2><figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line">参数：spark.memory.fraction</span><br><span class="line">含义：用于执行和存储的部分（堆空间-300MB）。值越低，溢出和缓存数据逐出的频率就越高。此配置的目的是为稀疏的，异常大的记录留出用于内部元数据，用户数据结构和大小估计不精确的内存。建议将其保留为默认值。</span><br><span class="line">默认值：0.6 (Spark 1.6 默认为 0.75，Spark 2.0+ 默认为 0.6)</span><br><span class="line"></span><br><span class="line">参数：spark.memory.storageFraction</span><br><span class="line">含义：可以逐出的存储内存量，以spark.memory.fraction预留的区域大小的一部分表示。数值越高，则可用于执行的工作内存就越少，任务可能会更频繁地溢出到磁盘上. 建议将其保留为默认值。</span><br><span class="line">默认值：0.5</span><br><span class="line"></span><br><span class="line">参数：spark.memory.offHeap.enabled</span><br><span class="line">含义：如果为true，Spark将尝试将堆外内存用于某些操作。如果启用了堆外内存使用，则spark.memory.offHeap.size必须为正。</span><br><span class="line">默认值：false</span><br><span class="line"></span><br><span class="line">参数：spark.memory.offHeap.size</span><br><span class="line">含义：可用于堆外分配的绝对内存量（以字节为单位）。此设置对堆内存使用没有影响，因此，如果执行者的总内存消耗必须在某个硬限制内，那么请确保相应地缩小JVM堆大小。当spark.memory.offHeap.enabled=true时，必须将此值设置为正值.</span><br><span class="line">默认值：0</span><br><span class="line"></span><br><span class="line">参数：spark.memory.useLegacyMode </span><br><span class="line">含义：是否启用Spark 1.5及之前版本中使用的旧版内存管理模式。传统模式将堆空间严格划分为固定大小的区域，如果未调整应用程序，则可能导致过多的溢出. 除非已启用，否则不会读取以下不推荐使用的内存分数配置： spark.shuffle.memoryFraction、spark.storage.memoryFraction、spark.storage.unrollFraction</span><br><span class="line">默认值：false</span><br><span class="line"></span><br><span class="line">参数：spark.shuffle.memoryFraction</span><br><span class="line">含义：（不建议使用）仅在启用spark.memory.useLegacyMode读。在 shuffle 期间用于聚合和协同分组的Java堆的分数。在任何给定时间，用于随机播放的所有内存映射的集合大小都受到此限制的限制，超出此限制，内容将开始溢出到磁盘。如果经常发生泄漏，请考虑以spark.storage.memoryFraction为代价增加此值.</span><br><span class="line">默认值：0.2</span><br><span class="line"></span><br><span class="line">参数：spark.storage.memoryFraction</span><br><span class="line">含义：（不建议使用）仅在启用spark.memory.useLegacyMode读。用于Spark的内存缓存的Java堆的分数。这不应大于JVM中对象的&quot;旧&quot;代，默认情况下，该对象的堆大小为0.6，但是如果您配置自己的旧代大小，则可以增加它。</span><br><span class="line">默认值：0.6</span><br><span class="line"></span><br><span class="line">参数：spark.storage.unrollFraction</span><br><span class="line">含义：（不建议使用）仅在启用spark.memory.useLegacyMode读。spark.storage.memoryFraction分数，用于展开内存中的块。当没有足够的可用存储空间来完全展开新块时，通过删除现有块来动态分配该块。</span><br><span class="line">默认值：0.2</span><br></pre></td></tr></table></figure>
+
+<h2 id="4-2-内存参数示例"><a href="#4-2-内存参数示例" class="headerlink" title="4.2 内存参数示例"></a>4.2 内存参数示例</h2><p>为了方便理解堆内内存，可以通过一个简单的例子来看看。假设我们提交的 Spark 作业内存设置为 –executor-memory 18g。提交命令为：</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">spark-submit \</span><br><span class="line">--master yarn \</span><br><span class="line">--deploy-mode client \</span><br><span class="line">--executor-memory 18g \</span><br><span class="line">--queue root.exquery \</span><br><span class="line">--class org.apache.spark.examples.SparkPi \</span><br><span class="line">/opt/cloudera/parcels/CDH/lib/spark/examples/lib/spark-examples-1.6.0-cdh5.14.4-hadoop2.6.0-cdh5.14.4.jar \</span><br><span class="line">100  </span><br></pre></td></tr></table></figure>
+
+<p>Spark UI 页面显示的内存情况：</p>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/12/19/6bcf4cfc9a71d27cb91407220c2beeed-image-20211219184847518-0da8d2.png" alt="image-20211219184847518"></p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">systemMemory = spark.executor.memory</span><br><span class="line">reservedMemory = 300MB</span><br><span class="line">usableMemory = systemMemory - reservedMemory</span><br><span class="line">StorageMemory= usableMemory * spark.memory.fraction * spark.memory.storageFraction</span><br></pre></td></tr></table></figure>
+
+<p>代入数据，可以得出以下结果：</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">systemMemory = 18Gb = 19327352832 字节</span><br><span class="line">reservedMemory = 300MB = 300 * 1024 * 1024 = 314572800</span><br><span class="line">usableMemory = systemMemory - reservedMemory = 19327352832 - 314572800 = 19012780032</span><br><span class="line">StorageMemory= usableMemory * spark.memory.fraction * spark.memory.storageFraction</span><br><span class="line">             = 19012780032 * 0.6 * 0.5 = 5703834009.6 = 5.312109375GB</span><br></pre></td></tr></table></figure>
+
+<p>结果和 Spark UI 界面展示的 10GB 差不多有一般的差距，这是因为 Spark UI 上显示的 Storage Memory 可用内存其实等于 Storage 内存和 Execution 内存之和，也就是 usableMemory * spark.memory.fraction。</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">StorageMemory= usableMemory * spark.memory.fraction * spark.memory.storageFraction</span><br><span class="line">             = 19012780032 * 0.6 / （1024 * 1024 * 1024) = 10.62421 GB</span><br></pre></td></tr></table></figure>
+
+<p>这个结果和 Spark UI 上看到的结果还是有点出入，为什么呢？这是因为虽然我们设置了 –executor-memory 18g，但是 Spark 的 Executor 端通过 Runtime.getRuntime.maxMemory 拿到的内存其实没这么大，只有 17179869184 字节，所以 systemMemory = 17179869184，然后计算的数据如下：</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">systemMemory = 17179869184 字节</span><br><span class="line">reservedMemory = 300MB = 300 * 1024 * 1024 = 314572800</span><br><span class="line">usableMemory = systemMemory - reservedMemory = 17179869184 - 314572800 = 16865296384</span><br><span class="line">StorageMemory= usableMemory * spark.memory.fraction</span><br><span class="line">             = 16865296384 * 0.6 /（1024 * 1024 * 1024)  = 9.42421 GB</span><br></pre></td></tr></table></figure>
+
+<p>我们通过将上面的 16865296384 * 0.6 字节除于 1024 * 1024 * 1024 转换成 9.42421875 GB，和 UI 上显示的还是对不上，这是因为 Spark UI 是通过除于 1000 * 1000 * 1000 将字节转换成 GB，如下：</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">systemMemory = 17179869184 字节</span><br><span class="line">reservedMemory = 300MB = 300 * 1024 * 1024 = 314572800</span><br><span class="line">usableMemory = systemMemory - reservedMemory = 17179869184 - 314572800 = 16865296384</span><br><span class="line">StorageMemory= usableMemory * spark.memory.fraction</span><br><span class="line">             = 16865296384 * 0.6 字节 =  16865296384 * 0.6 / (1000 * 1000 * 1000) = 10.1GB</span><br></pre></td></tr></table></figure>
+
+<p>systemMemory 内存之所以为 17179869184（可以通过方法 Runtime.getRuntime.maxMemory( ) 获得该值），是因为内存分配池的堆部分分为 Eden，Survivor 和 Tenured 三部分空间，而这里面一共包含了两个 Survivor 区域，而这两个 Survivor 区域在任何时候我们只能用到其中一个，所以我们可以使用下面的公式进行描述：</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">ExecutorMemory = Eden + 2 * Survivor + Tenured</span><br><span class="line">Runtime.getRuntime.maxMemory =  Eden + Survivor + Tenured</span><br></pre></td></tr></table></figure>
+
+<p>上面的 17179869184 字节可能因为你的 GC 配置不一样得到的数据不一样，但是上面的计算公式是一样的。</p>
+<h1 id="参考资料"><a href="#参考资料" class="headerlink" title="参考资料"></a>参考资料</h1><ul>
+<li><a target="_blank" rel="noopener" href="https://developer.ibm.com/zh/articles/ba-cn-apache-spark-memory-management/">https://developer.ibm.com/zh/articles/ba-cn-apache-spark-memory-management/</a></li>
+<li><a target="_blank" rel="noopener" href="https://www.iteblog.com/archives/2342.html">Apache Spark 统一内存管理模型详解</a></li>
+</ul>
+
+    </div>
+
+    
+    
+    
+
+    <div>
+      
+      <div>
+	 
+		<div style="text-align:center;color:#bfbfbf;font-size:16px;"> 
+			<span>-------- 本文结束 </span> <i class="fa fa-paw"></i> <span> 感谢阅读 --------</span>
+		</div> 
+	
+</div>
+      
+    </div>
+        <div class="reward-container">
+  <div></div>
+  <button onclick="var qr = document.getElementById('qr'); qr.style.display = (qr.style.display === 'none') ? 'block' : 'none';">
+    请我喝杯咖啡~
+  </button>
+  <div id="qr" style="display: none;">
+      
+      <div style="display: inline-block;">
+        <img src="/images/wechatpay.png" alt="笨小康 微信打赏">
+        <p>微信打赏</p>
+      </div>
+      
+      <div style="display: inline-block;">
+        <img src="/images/alipay.png" alt="笨小康 支付宝打赏">
+        <p>支付宝打赏</p>
+      </div>
+
+  </div>
+</div>
+
+
+      <footer class="post-footer">
+          <div class="post-tags">
+              <a href="/tags/Spark/" rel="tag"><i class="fa fa-tag"></i> Spark</a>
+              <a href="/tags/Spark%E5%8E%9F%E7%90%86/" rel="tag"><i class="fa fa-tag"></i> Spark原理</a>
+          </div>
+
+        
+
+
+        
+    <div class="post-nav">
+      <div class="post-nav-item">
+    <a href="/2021/12/05/Spark-RDD%E6%8C%81%E4%B9%85%E5%8C%96%E6%9C%BA%E5%88%B6%E5%8F%8A%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/" rel="prev" title="Spark RDD持久化机制及源码分析">
+      <i class="fa fa-chevron-left"></i> Spark RDD持久化机制及源码分析
+    </a></div>
+      <div class="post-nav-item">
+    <a href="/2021/12/12/Spark-ContextCleaner%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/" rel="next" title="Spark ContextCleaner源码分析">
+      Spark ContextCleaner源码分析 <i class="fa fa-chevron-right"></i>
+    </a></div>
+    </div>
+      </footer>
+    
+  </article>
+  
+  
+  
+
+
+
+
+          </div>
+          
+
+<script>
+  window.addEventListener('tabs:register', () => {
+    let { activeClass } = CONFIG.comments;
+    if (CONFIG.comments.storage) {
+      activeClass = localStorage.getItem('comments_active') || activeClass;
+    }
+    if (activeClass) {
+      let activeTab = document.querySelector(`a[href="#comment-${activeClass}"]`);
+      if (activeTab) {
+        activeTab.click();
+      }
+    }
+  });
+  if (CONFIG.comments.storage) {
+    window.addEventListener('tabs:click', event => {
+      if (!event.target.matches('.tabs-comment .tab-content .tab-pane')) return;
+      let commentClass = event.target.classList[1];
+      localStorage.setItem('comments_active', commentClass);
+    });
+  }
+</script>
+
+        </div>
+          
+  
+  <div class="toggle sidebar-toggle">
+    <span class="toggle-line toggle-line-first"></span>
+    <span class="toggle-line toggle-line-middle"></span>
+    <span class="toggle-line toggle-line-last"></span>
+  </div>
+
+  <aside class="sidebar">
+    <div class="sidebar-inner">
+
+      <ul class="sidebar-nav motion-element">
+        <li class="sidebar-nav-toc">
+          文章目录
+        </li>
+        <li class="sidebar-nav-overview">
+          站点概览
+        </li>
+      </ul>
+
+      <!--noindex-->
+      <div class="post-toc-wrap sidebar-panel">
+          <div class="post-toc motion-element"><ol class="nav"><li class="nav-item nav-level-1"><a class="nav-link" href="#1-Spark-%E5%86%85%E5%AD%98%E4%BB%8B%E7%BB%8D"><span class="nav-text">1. Spark 内存介绍</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#2-Executor%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86"><span class="nav-text">2. Executor内存管理</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#2-1-%E5%A0%86%E5%86%85%E5%86%85%E5%AD%98"><span class="nav-text">2.1 堆内内存</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#2-2-%E5%A0%86%E5%A4%96%E5%86%85%E5%AD%98"><span class="nav-text">2.2 堆外内存</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#3-%E7%BB%9F%E4%B8%80%E5%86%85%E5%AD%98%E5%8A%A8%E6%80%81%E5%8D%A0%E7%94%A8%E6%9C%BA%E5%88%B6"><span class="nav-text">3. 统一内存动态占用机制</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#4-Spark%E5%86%85%E5%AD%98%E5%8F%82%E6%95%B0"><span class="nav-text">4. Spark内存参数</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#4-1-%E7%BB%9F%E4%B8%80%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E5%8F%82%E6%95%B0"><span class="nav-text">4.1 统一内存管理参数</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#4-2-%E5%86%85%E5%AD%98%E5%8F%82%E6%95%B0%E7%A4%BA%E4%BE%8B"><span class="nav-text">4.2 内存参数示例</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="nav-text">参考资料</span></a></li></ol></div>
+      </div>
+      <!--/noindex-->
+
+      <div class="site-overview-wrap sidebar-panel">
+        <div class="site-author motion-element" itemprop="author" itemscope itemtype="http://schema.org/Person">
+  <p class="site-author-name" itemprop="name">笨小康</p>
+  <div class="site-description" itemprop="description"></div>
+</div>
+<div class="site-state-wrap motion-element">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+          <a href="/archives/">
+        
+          <span class="site-state-item-count">21</span>
+          <span class="site-state-item-name">日志</span>
+        </a>
+      </div>
+      <div class="site-state-item site-state-categories">
+            <a href="/categories/">
+          
+        <span class="site-state-item-count">4</span>
+        <span class="site-state-item-name">分类</span></a>
+      </div>
+      <div class="site-state-item site-state-tags">
+            <a href="/tags/">
+          
+        <span class="site-state-item-count">9</span>
+        <span class="site-state-item-name">标签</span></a>
+      </div>
+  </nav>
+</div>
+
+
+
+      </div>
+
+    </div>
+  </aside>
+  <div id="sidebar-dimmer"></div>
+
+
+      </div>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        
+
+        
+
+<div class="copyright">
+  
+  &copy; 
+  <span itemprop="copyrightYear">2021</span>
+  <span class="with-love">
+    <i class="fa fa-heart"></i>
+  </span>
+  <span class="author" itemprop="copyrightHolder">笨小康</span>
+</div>
+
+        
+
+
+
+
+
+
+
+
+      </div>
+    </footer>
+  </div>
+
+  
+  <script src="/lib/anime.min.js"></script>
+  <script src="/lib/velocity/velocity.min.js"></script>
+  <script src="/lib/velocity/velocity.ui.min.js"></script>
+
+<script src="/js/utils.js"></script>
+
+<script src="/js/motion.js"></script>
+
+
+<script src="/js/schemes/pisces.js"></script>
+
+
+<script src="/js/next-boot.js"></script>
+
+
+
+
+  
+
+
+
+
+  
+<script src="/js/local-search.js"></script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+  
+
+</body>
+</html>

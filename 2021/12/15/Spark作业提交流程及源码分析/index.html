@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=2">
+<meta name="theme-color" content="#222">
+<meta name="generator" content="Hexo 5.4.0">
+  <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon-next.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/images/favicon-32x32-next.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/favicon-16x16-next.png">
+  <link rel="mask-icon" href="/images/logo.svg" color="#222">
+
+<link rel="stylesheet" href="/css/main.css">
+
+<link rel="stylesheet" href="//fonts.googleapis.com/css?family=Lato:300,300italic,400,400italic,700,700italic&display=swap&subset=latin,latin-ext">
+<link rel="stylesheet" href="/lib/font-awesome/css/all.min.css">
+
+<script id="hexo-configurations">
+    var NexT = window.NexT || {};
+    var CONFIG = {"hostname":"yoursite.com","root":"/","scheme":"Pisces","version":"7.8.0","exturl":false,"sidebar":{"position":"left","display":"post","padding":18,"offset":12,"onmobile":false},"copycode":{"enable":true,"show_result":true,"style":"default"},"back2top":{"enable":true,"sidebar":false,"scrollpercent":false},"bookmark":{"enable":false,"color":"#222","save":"auto"},"fancybox":false,"mediumzoom":false,"lazyload":false,"pangu":false,"comments":{"style":"tabs","active":null,"storage":true,"lazyload":false,"nav":null},"algolia":{"hits":{"per_page":10},"labels":{"input_placeholder":"Search for Posts","hits_empty":"We didn't find any results for the search: ${query}","hits_stats":"${hits} results found in ${time} ms"}},"localsearch":{"enable":true,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false},"motion":{"enable":true,"async":false,"transition":{"post_block":"fadeIn","post_header":"slideDownIn","post_body":"slideDownIn","coll_header":"slideLeftIn","sidebar":"slideUpIn"}},"path":"search.xml"};
+  </script>
+
+  <meta name="description" content="源码版本：Apache Spark 2.4.7 导读：本文主要从源码角度介绍 Spark 作业的提交流程，一个应用程序从提交，到执行流程图的构建，到任务在 Executor 端执行，Spark 是如何执行这一系列的逻辑呢，本文将结合源码展开介绍。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Spark作业提交流程及源码分析">
+<meta property="og:url" content="http://yoursite.com/2021/12/15/Spark%E4%BD%9C%E4%B8%9A%E6%8F%90%E4%BA%A4%E6%B5%81%E7%A8%8B%E5%8F%8A%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/index.html">
+<meta property="og:site_name" content="笨小康的博客">
+<meta property="og:description" content="源码版本：Apache Spark 2.4.7 导读：本文主要从源码角度介绍 Spark 作业的提交流程，一个应用程序从提交，到执行流程图的构建，到任务在 Executor 端执行，Spark 是如何执行这一系列的逻辑呢，本文将结合源码展开介绍。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/12/19/fa8bbf2d26c01e17c90e93e9f8ed5592-1639723948405-ad5b4876-d332-4f40-823c-d914cd9c8c92-e9a44a.png">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/12/19/bd630cd4ad8c5a2241090e04c547029b-1630392633594-8f32c89c-f5cd-46b0-8eef-5c750676ff7d-53919e.png">
+<meta property="article:published_time" content="2021-12-15T11:03:06.000Z">
+<meta property="article:modified_time" content="2021-12-19T11:29:18.420Z">
+<meta property="article:author" content="笨小康">
+<meta property="article:tag" content="Spark">
+<meta property="article:tag" content="Spark源码">
+<meta property="article:tag" content="Spark原理">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/12/19/fa8bbf2d26c01e17c90e93e9f8ed5592-1639723948405-ad5b4876-d332-4f40-823c-d914cd9c8c92-e9a44a.png">
+
+<link rel="canonical" href="http://yoursite.com/2021/12/15/Spark%E4%BD%9C%E4%B8%9A%E6%8F%90%E4%BA%A4%E6%B5%81%E7%A8%8B%E5%8F%8A%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/">
+
+
+<script id="page-configurations">
+  // https://hexo.io/docs/variables.html
+  CONFIG.page = {
+    sidebar: "",
+    isHome : false,
+    isPost : true,
+    lang   : 'zh-CN'
+  };
+</script>
+
+  <title>Spark作业提交流程及源码分析 | 笨小康的博客</title>
+  
+
+
+
+
+
+
+  <noscript>
+  <style>
+  .use-motion .brand,
+  .use-motion .menu-item,
+  .sidebar-inner,
+  .use-motion .post-block,
+  .use-motion .pagination,
+  .use-motion .comments,
+  .use-motion .post-header,
+  .use-motion .post-body,
+  .use-motion .collection-header { opacity: initial; }
+
+  .use-motion .site-title,
+  .use-motion .site-subtitle {
+    opacity: initial;
+    top: initial;
+  }
+
+  .use-motion .logo-line-before i { left: initial; }
+  .use-motion .logo-line-after i { right: initial; }
+  </style>
+</noscript>
+
+</head>
+
+<body itemscope itemtype="http://schema.org/WebPage">
+  <div class="container use-motion">
+    <div class="headband"></div>
+
+    <header class="header" itemscope itemtype="http://schema.org/WPHeader">
+      <div class="header-inner"><div class="site-brand-container">
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="切换导航栏">
+      <span class="toggle-line toggle-line-first"></span>
+      <span class="toggle-line toggle-line-middle"></span>
+      <span class="toggle-line toggle-line-last"></span>
+    </div>
+  </div>
+
+  <div class="site-meta">
+
+    <a href="/" class="brand" rel="start">
+      <span class="logo-line-before"><i></i></span>
+      <h1 class="site-title">笨小康的博客</h1>
+      <span class="logo-line-after"><i></i></span>
+    </a>
+      <p class="site-subtitle" itemprop="description">星辰大海, 如期而至</p>
+  </div>
+
+  <div class="site-nav-right">
+    <div class="toggle popup-trigger">
+        <i class="fa fa-search fa-fw fa-lg"></i>
+    </div>
+  </div>
+</div>
+
+
+
+
+<nav class="site-nav">
+  <ul id="menu" class="main-menu menu">
+        <li class="menu-item menu-item-home">
+
+    <a href="/" rel="section"><i class="fa fa-home fa-fw"></i>首页</a>
+
+  </li>
+        <li class="menu-item menu-item-archives">
+
+    <a href="/archives/" rel="section"><i class="fa fa-archive fa-fw"></i>归档</a>
+
+  </li>
+        <li class="menu-item menu-item-categories">
+
+    <a href="/categories/" rel="section"><i class="fa fa-th fa-fw"></i>分类</a>
+
+  </li>
+        <li class="menu-item menu-item-tags">
+
+    <a href="/tags/" rel="section"><i class="fa fa-tags fa-fw"></i>标签云</a>
+
+  </li>
+        <li class="menu-item menu-item-flomo">
+
+    <a href="/categories/flomo/" rel="section"><i class="fa fa-lightbulb fa-fw"></i>随想录</a>
+
+  </li>
+        <li class="menu-item menu-item-about">
+
+    <a href="/about/" rel="section"><i class="fa fa-user fa-fw"></i>关于我</a>
+
+  </li>
+      <li class="menu-item menu-item-search">
+        <a role="button" class="popup-trigger"><i class="fa fa-search fa-fw"></i>搜文章
+        </a>
+      </li>
+  </ul>
+</nav>
+
+
+
+  <div class="search-pop-overlay">
+    <div class="popup search-popup">
+        <div class="search-header">
+  <span class="search-icon">
+    <i class="fa fa-search"></i>
+  </span>
+  <div class="search-input-container">
+    <input autocomplete="off" autocapitalize="off"
+           placeholder="搜索..." spellcheck="false"
+           type="search" class="search-input">
+  </div>
+  <span class="popup-btn-close">
+    <i class="fa fa-times-circle"></i>
+  </span>
+</div>
+<div id="search-result">
+  <div id="no-result">
+    <i class="fa fa-spinner fa-pulse fa-5x fa-fw"></i>
+  </div>
+</div>
+
+    </div>
+  </div>
+
+</div>
+    </header>
+
+    
+  <div class="back-to-top">
+    <i class="fa fa-arrow-up"></i>
+    <span>0%</span>
+  </div>
+  <div class="reading-progress-bar"></div>
+
+
+    <main class="main">
+      <div class="main-inner">
+        <div class="content-wrap">
+          
+
+          <div class="content post posts-expand">
+            
+
+    
+  
+  
+  <article itemscope itemtype="http://schema.org/Article" class="post-block" lang="zh-CN">
+    <link itemprop="mainEntityOfPage" href="http://yoursite.com/2021/12/15/Spark%E4%BD%9C%E4%B8%9A%E6%8F%90%E4%BA%A4%E6%B5%81%E7%A8%8B%E5%8F%8A%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/images/avatar.gif">
+      <meta itemprop="name" content="笨小康">
+      <meta itemprop="description" content="">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="笨小康的博客">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          Spark作业提交流程及源码分析
+        </h1>
+
+        <div class="post-meta">
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-calendar"></i>
+              </span>
+              <span class="post-meta-item-text">发表于</span>
+
+              <time title="创建时间：2021-12-15 19:03:06" itemprop="dateCreated datePublished" datetime="2021-12-15T19:03:06+08:00">2021-12-15</time>
+            </span>
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-folder"></i>
+              </span>
+              <span class="post-meta-item-text">分类于</span>
+                <span itemprop="about" itemscope itemtype="http://schema.org/Thing">
+                  <a href="/categories/Spark/" itemprop="url" rel="index"><span itemprop="name">Spark</span></a>
+                </span>
+            </span>
+
+          
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody">
+
+      
+        <blockquote>
+<p>源码版本：Apache Spark 2.4.7</p>
+<p>导读：本文主要从源码角度介绍 Spark 作业的提交流程，一个应用程序从提交，到执行流程图的构建，到任务在 Executor 端执行，Spark 是如何执行这一系列的逻辑呢，本文将结合源码展开介绍。</p>
+</blockquote>
+<h1 id="1-作业执行流程简介"><a href="#1-作业执行流程简介" class="headerlink" title="1. 作业执行流程简介"></a>1. 作业执行流程简介</h1><p>下图是 Spark 作业提交到执行的流程，主要划分为四个阶段：</p>
+<ul>
+<li><p>编写 Driver 程序，定义 RDD 的 Action 和 Transformation 操作，Driver 端启动时根据算子依赖关系形成 DAG 有向无环图。</p>
+</li>
+<li><p>根据形成的 DAG 图，DAGScheduler 将其划分为不同的 Stage。</p>
+</li>
+<li><p>每个 Stage 中有一个 TaskSet（一系列 Task 的集合），DAGScheduler 将 TaskSet 交给 TaskScheduler 去执行，TaskScheduler 将任务执行完毕后将结果返回给 DAGScheduler。</p>
+</li>
+<li><p>TaskScheduler 会真正将 Task 分发到不同的 Worker 节点去执行，并将执行结果返回给 TaskScheduler。</p>
+</li>
+</ul>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/12/19/fa8bbf2d26c01e17c90e93e9f8ed5592-1639723948405-ad5b4876-d332-4f40-823c-d914cd9c8c92-e9a44a.png" alt="img"></p>
+<center>Spark作业提交逻辑图</center>
+
+<h1 id="2-任务执行源码分析"><a href="#2-任务执行源码分析" class="headerlink" title="2. 任务执行源码分析"></a>2. 任务执行源码分析</h1><p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/12/19/bd630cd4ad8c5a2241090e04c547029b-1630392633594-8f32c89c-f5cd-46b0-8eef-5c750676ff7d-53919e.png" alt="img"></p>
+<center>Spark作业提交源码流程图</center>
+
+<p>Spark 的作业调度主要是基于 RDD 的一系列操作构成一个 Job，然后在 Executor 中执行，这些操作算子分为转换操作（Transform）和行动操作（Action)，只有触发了 Action 操作才会触发 Job 的提交。本文以 RDD 的 count Action 算子为入口，介绍 Spark 作业的提交过程。</p>
+<h2 id="2-1-初始化操作"><a href="#2-1-初始化操作" class="headerlink" title="2.1 初始化操作"></a>2.1 初始化操作</h2><p>Driver 端作为 Spark 作业执行的核心组件，管控着整个 Spark 作业的生命周期，而所谓的 Driver 端最核心的对象就在于 SparkContext，在 Job 提交之前，都需要对 SparkContext 进行初始化。SparkContext 初始化时会构建特别多的关键对象，目的是管控 Spark 作业的生命周期。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/SparkContext.scala</span></span><br><span class="line">  <span class="comment">/* ------------------------------------------------------------------------------------- *</span></span><br><span class="line"><span class="comment">   | Private variables. These variables keep the internal state of the context, and are    |</span></span><br><span class="line"><span class="comment">   | not accessible by the outside world. They&#x27;re mutable since we want to initialize all  |</span></span><br><span class="line"><span class="comment">   | of them to some neutral value ahead of time, so that calling &quot;stop()&quot; while the       |</span></span><br><span class="line"><span class="comment">   | constructor is still running is safe.                                                 |</span></span><br><span class="line"><span class="comment">   * ------------------------------------------------------------------------------------- */</span></span><br><span class="line"></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">var</span> _conf: <span class="type">SparkConf</span> = _</span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">var</span> _eventLogDir: <span class="type">Option</span>[<span class="type">URI</span>] = <span class="type">None</span></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">var</span> _eventLogCodec: <span class="type">Option</span>[<span class="type">String</span>] = <span class="type">None</span></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">var</span> _listenerBus: <span class="type">LiveListenerBus</span> = _</span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">var</span> _env: <span class="type">SparkEnv</span> = _</span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">var</span> _statusTracker: <span class="type">SparkStatusTracker</span> = _</span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">var</span> _progressBar: <span class="type">Option</span>[<span class="type">ConsoleProgressBar</span>] = <span class="type">None</span></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">var</span> _ui: <span class="type">Option</span>[<span class="type">SparkUI</span>] = <span class="type">None</span></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">var</span> _hadoopConfiguration: <span class="type">Configuration</span> = _</span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">var</span> _executorMemory: <span class="type">Int</span> = _</span><br><span class="line">	<span class="comment">// SchedulerBackend对象，TaskScheduler 的调度后端接口，真正负责 Task 的资源分配</span></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">var</span> _schedulerBackend: <span class="type">SchedulerBackend</span> = _</span><br><span class="line">	<span class="comment">// TaskScheduler对象，负责将 Task 分配给 Executor 执行（通过 SchedulerBackend 实现）</span></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">var</span> _taskScheduler: <span class="type">TaskScheduler</span> = _</span><br><span class="line">	<span class="comment">// 心跳接收器，负责定时接收 Executor 的心跳</span></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">var</span> _heartbeatReceiver: <span class="type">RpcEndpointRef</span> = _</span><br><span class="line">	<span class="comment">// DAGScheduler对象，负责 Job 的创建，Stage 划分，并将 Stage 交给 TaskScheduler</span></span><br><span class="line">  <span class="meta">@volatile</span> <span class="keyword">private</span> <span class="keyword">var</span> _dagScheduler: <span class="type">DAGScheduler</span> = _</span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">var</span> _applicationId: <span class="type">String</span> = _</span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">var</span> _applicationAttemptId: <span class="type">Option</span>[<span class="type">String</span>] = <span class="type">None</span></span><br><span class="line">  <span class="comment">// 事件监听器（可选服务），负责将事件持久化到存储系统</span></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">var</span> _eventLogger: <span class="type">Option</span>[<span class="type">EventLoggingListener</span>] = <span class="type">None</span></span><br><span class="line">  <span class="comment">// 资源管理器：负责Executor资源的动态申请和分配</span></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">var</span> _executorAllocationManager: <span class="type">Option</span>[<span class="type">ExecutorAllocationManager</span>] = <span class="type">None</span></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">var</span> _cleaner: <span class="type">Option</span>[<span class="type">ContextCleaner</span>] = <span class="type">None</span></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">var</span> _listenerBusStarted: <span class="type">Boolean</span> = <span class="literal">false</span></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">var</span> _jars: <span class="type">Seq</span>[<span class="type">String</span>] = _</span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">var</span> _files: <span class="type">Seq</span>[<span class="type">String</span>] = _</span><br><span class="line">  <span class="comment">// Hook函数，处理程序退出时的逻辑</span></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">var</span> _shutdownHookRef: <span class="type">AnyRef</span> = _</span><br><span class="line">  <span class="comment">// 状态存储，负责收集和展示作业的运行状态信息</span></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">var</span> _statusStore: <span class="type">AppStatusStore</span> = _</span><br><span class="line">  <span class="comment">// 心跳服务，负责构建心跳对象</span></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">var</span> _heartbeater: <span class="type">Heartbeater</span> = _</span><br></pre></td></tr></table></figure>
+
+<p>根据前面 Spark 作业的执行流程中，最重要的对象包括 DAGScheduler、TaskScheduler 和 SchedulerBackend。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/SparkContext.scala</span></span><br><span class="line">    <span class="comment">// Create and start the scheduler</span></span><br><span class="line">    <span class="keyword">val</span> (sched, ts) = <span class="type">SparkContext</span>.createTaskScheduler(<span class="keyword">this</span>, master, deployMode)</span><br><span class="line">    _schedulerBackend = sched</span><br><span class="line">    _taskScheduler = ts</span><br><span class="line">    _dagScheduler = <span class="keyword">new</span> <span class="type">DAGScheduler</span>(<span class="keyword">this</span>)</span><br></pre></td></tr></table></figure>
+
+<h2 id="2-2-提交Job"><a href="#2-2-提交Job" class="headerlink" title="2.2 提交Job"></a>2.2 提交Job</h2><p>当我们执行 RDD 的 count()，产生了一个 Action 操作，每个 Action 操作在 Spark 里都会生成一个 Job。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/rdd/RDD.scala</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">count</span></span>(): <span class="type">Long</span> = sc.runJob(<span class="keyword">this</span>, <span class="type">Utils</span>.getIteratorSize _).sum</span><br></pre></td></tr></table></figure>
+
+<p>count() 方法底层是执行 SparkContext#runJob() 方法，可以看到在 SparkContext 内部重载了多个 runJob()，最后会调用到 DAGScheduler#runJob() 执行真正的作业提交。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/SparkContext.scala</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">runJob</span></span>[<span class="type">T</span>, <span class="type">U</span>: <span class="type">ClassTag</span>](rdd: <span class="type">RDD</span>[<span class="type">T</span>], func: <span class="type">Iterator</span>[<span class="type">T</span>] =&gt; <span class="type">U</span>): <span class="type">Array</span>[<span class="type">U</span>] = &#123;</span><br><span class="line">    runJob(rdd, func, <span class="number">0</span> until rdd.partitions.length)</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">runJob</span></span>[<span class="type">T</span>, <span class="type">U</span>: <span class="type">ClassTag</span>](</span><br><span class="line">      rdd: <span class="type">RDD</span>[<span class="type">T</span>],</span><br><span class="line">      func: <span class="type">Iterator</span>[<span class="type">T</span>] =&gt; <span class="type">U</span>,</span><br><span class="line">      partitions: <span class="type">Seq</span>[<span class="type">Int</span>]): <span class="type">Array</span>[<span class="type">U</span>] = &#123;</span><br><span class="line">    <span class="keyword">val</span> cleanedFunc = clean(func)</span><br><span class="line">    runJob(rdd, (ctx: <span class="type">TaskContext</span>, it: <span class="type">Iterator</span>[<span class="type">T</span>]) =&gt; cleanedFunc(it), partitions)</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">runJob</span></span>[<span class="type">T</span>, <span class="type">U</span>: <span class="type">ClassTag</span>](</span><br><span class="line">      rdd: <span class="type">RDD</span>[<span class="type">T</span>],</span><br><span class="line">      func: (<span class="type">TaskContext</span>, <span class="type">Iterator</span>[<span class="type">T</span>]) =&gt; <span class="type">U</span>,</span><br><span class="line">      partitions: <span class="type">Seq</span>[<span class="type">Int</span>]): <span class="type">Array</span>[<span class="type">U</span>] = &#123;</span><br><span class="line">    <span class="keyword">val</span> results = <span class="keyword">new</span> <span class="type">Array</span>[<span class="type">U</span>](partitions.size)</span><br><span class="line">    runJob[<span class="type">T</span>, <span class="type">U</span>](rdd, func, partitions, (index, res) =&gt; results(index) = res)</span><br><span class="line">    results</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">runJob</span></span>[<span class="type">T</span>, <span class="type">U</span>: <span class="type">ClassTag</span>](</span><br><span class="line">      rdd: <span class="type">RDD</span>[<span class="type">T</span>],</span><br><span class="line">      func: (<span class="type">TaskContext</span>, <span class="type">Iterator</span>[<span class="type">T</span>]) =&gt; <span class="type">U</span>,</span><br><span class="line">      partitions: <span class="type">Seq</span>[<span class="type">Int</span>],</span><br><span class="line">      resultHandler: (<span class="type">Int</span>, <span class="type">U</span>) =&gt; <span class="type">Unit</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">    <span class="keyword">if</span> (stopped.get()) &#123;</span><br><span class="line">      <span class="keyword">throw</span> <span class="keyword">new</span> <span class="type">IllegalStateException</span>(<span class="string">&quot;SparkContext has been shutdown&quot;</span>)</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">val</span> callSite = getCallSite</span><br><span class="line">    <span class="keyword">val</span> cleanedFunc = clean(func)</span><br><span class="line">    logInfo(<span class="string">&quot;Starting job: &quot;</span> + callSite.shortForm)</span><br><span class="line">    <span class="keyword">if</span> (conf.getBoolean(<span class="string">&quot;spark.logLineage&quot;</span>, <span class="literal">false</span>)) &#123;</span><br><span class="line">      logInfo(<span class="string">&quot;RDD&#x27;s recursive dependencies:\n&quot;</span> + rdd.toDebugString)</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="comment">// 调用 dagScheduler 的 runJob 方法来提交作业</span></span><br><span class="line">    dagScheduler.runJob(rdd, cleanedFunc, partitions, callSite, resultHandler, localProperties.get)</span><br><span class="line">    progressBar.foreach(_.finishAll())</span><br><span class="line">    rdd.doCheckpoint()</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>DAGScheduler#runJob() 内部调用 submitJob() 提交作业，并对作业的执行结果（成功或失败）进行判断处理。因此，可以知道 submitJob() 是 Spark Job 提交最关键的入口，内部会执行具体的 Job 操作，最后返回 Job 的结果状态。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/DAGScheduler.scala</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">runJob</span></span>[<span class="type">T</span>, <span class="type">U</span>](</span><br><span class="line">      rdd: <span class="type">RDD</span>[<span class="type">T</span>],</span><br><span class="line">      func: (<span class="type">TaskContext</span>, <span class="type">Iterator</span>[<span class="type">T</span>]) =&gt; <span class="type">U</span>,</span><br><span class="line">      partitions: <span class="type">Seq</span>[<span class="type">Int</span>],</span><br><span class="line">      callSite: <span class="type">CallSite</span>,</span><br><span class="line">      resultHandler: (<span class="type">Int</span>, <span class="type">U</span>) =&gt; <span class="type">Unit</span>,</span><br><span class="line">      properties: <span class="type">Properties</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">    <span class="keyword">val</span> start = <span class="type">System</span>.nanoTime</span><br><span class="line">    <span class="comment">// 调用 submitJob 方法提交作业，返回成功或者失败</span></span><br><span class="line">    <span class="keyword">val</span> waiter = submitJob(rdd, func, partitions, callSite, resultHandler, properties)</span><br><span class="line">    <span class="type">ThreadUtils</span>.awaitReady(waiter.completionFuture, <span class="type">Duration</span>.<span class="type">Inf</span>)</span><br><span class="line">    waiter.completionFuture.value.get <span class="keyword">match</span> &#123;</span><br><span class="line">      <span class="keyword">case</span> scala.util.<span class="type">Success</span>(_) =&gt;</span><br><span class="line">        logInfo(<span class="string">&quot;Job %d finished: %s, took %f s&quot;</span>.format</span><br><span class="line">          (waiter.jobId, callSite.shortForm, (<span class="type">System</span>.nanoTime - start) / <span class="number">1e9</span>))</span><br><span class="line">      <span class="keyword">case</span> scala.util.<span class="type">Failure</span>(exception) =&gt;</span><br><span class="line">        logInfo(<span class="string">&quot;Job %d failed: %s, took %f s&quot;</span>.format</span><br><span class="line">          (waiter.jobId, callSite.shortForm, (<span class="type">System</span>.nanoTime - start) / <span class="number">1e9</span>))</span><br><span class="line">        <span class="comment">// SPARK-8644: Include user stack trace in exceptions coming from DAGScheduler.</span></span><br><span class="line">        <span class="keyword">val</span> callerStackTrace = <span class="type">Thread</span>.currentThread().getStackTrace.tail</span><br><span class="line">        exception.setStackTrace(exception.getStackTrace ++ callerStackTrace)</span><br><span class="line">        <span class="keyword">throw</span> exception</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>DAGScheduler#submitJob() 内部会发送 JobSubmitted 事件，该事件继承自 DAGSchedulerEvent 事件接口类。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/DAGScheduler.scala</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">submitJob</span></span>[<span class="type">T</span>, <span class="type">U</span>](</span><br><span class="line">      rdd: <span class="type">RDD</span>[<span class="type">T</span>],</span><br><span class="line">      func: (<span class="type">TaskContext</span>, <span class="type">Iterator</span>[<span class="type">T</span>]) =&gt; <span class="type">U</span>,</span><br><span class="line">      partitions: <span class="type">Seq</span>[<span class="type">Int</span>],</span><br><span class="line">      callSite: <span class="type">CallSite</span>,</span><br><span class="line">      resultHandler: (<span class="type">Int</span>, <span class="type">U</span>) =&gt; <span class="type">Unit</span>,</span><br><span class="line">      properties: <span class="type">Properties</span>): <span class="type">JobWaiter</span>[<span class="type">U</span>] = &#123;</span><br><span class="line">    <span class="comment">// Check to make sure we are not launching a task on a partition that does not exist.</span></span><br><span class="line">    <span class="keyword">val</span> maxPartitions = rdd.partitions.length</span><br><span class="line">    partitions.find(p =&gt; p &gt;= maxPartitions || p &lt; <span class="number">0</span>).foreach &#123; p =&gt;</span><br><span class="line">      <span class="keyword">throw</span> <span class="keyword">new</span> <span class="type">IllegalArgumentException</span>(</span><br><span class="line">        <span class="string">&quot;Attempting to access a non-existent partition: &quot;</span> + p + <span class="string">&quot;. &quot;</span> +</span><br><span class="line">          <span class="string">&quot;Total number of partitions: &quot;</span> + maxPartitions)</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">val</span> jobId = nextJobId.getAndIncrement()</span><br><span class="line">    <span class="keyword">if</span> (partitions.size == <span class="number">0</span>) &#123;</span><br><span class="line">      <span class="comment">// Return immediately if the job is running 0 tasks</span></span><br><span class="line">      <span class="keyword">return</span> <span class="keyword">new</span> <span class="type">JobWaiter</span>[<span class="type">U</span>](<span class="keyword">this</span>, jobId, <span class="number">0</span>, resultHandler)</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    assert(partitions.size &gt; <span class="number">0</span>)</span><br><span class="line">    <span class="keyword">val</span> func2 = func.asInstanceOf[(<span class="type">TaskContext</span>, <span class="type">Iterator</span>[_]) =&gt; _]</span><br><span class="line">    <span class="keyword">val</span> waiter = <span class="keyword">new</span> <span class="type">JobWaiter</span>(<span class="keyword">this</span>, jobId, partitions.size, resultHandler)</span><br><span class="line">    <span class="comment">// 关键：DAGSchedulerEventProcessLoop 是 DAGScheduler 的内部类</span></span><br><span class="line">    <span class="comment">// 负责接收和转发 DAGSchedulerEvent 事件 </span></span><br><span class="line">    eventProcessLoop.post(<span class="type">JobSubmitted</span>(</span><br><span class="line">      jobId, rdd, func2, partitions.toArray, callSite, waiter,</span><br><span class="line">      <span class="type">SerializationUtils</span>.clone(properties)))</span><br><span class="line">    waiter</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line"></span><br><span class="line"><span class="comment">// JobSubmitted 事件定义</span></span><br><span class="line"><span class="keyword">private</span>[scheduler] <span class="keyword">case</span> <span class="class"><span class="keyword">class</span> <span class="title">JobSubmitted</span>(<span class="params"></span></span></span><br><span class="line"><span class="params"><span class="class">    jobId: <span class="type">Int</span>,</span></span></span><br><span class="line"><span class="params"><span class="class">    finalRDD: <span class="type">RDD</span>[_],</span></span></span><br><span class="line"><span class="params"><span class="class">    func: (<span class="type">TaskContext</span>, <span class="type">Iterator</span>[_]</span>) <span class="title">=&gt;</span> <span class="title">_</span>,</span></span><br><span class="line">    partitions: <span class="type">Array</span>[<span class="type">Int</span>],</span><br><span class="line">    callSite: <span class="type">CallSite</span>,</span><br><span class="line">    listener: <span class="type">JobListener</span>,</span><br><span class="line">    properties: <span class="type">Properties</span> = <span class="literal">null</span>)</span><br><span class="line">  <span class="keyword">extends</span> <span class="type">DAGSchedulerEvent</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="2-3-DAGScheduler事件转发"><a href="#2-3-DAGScheduler事件转发" class="headerlink" title="2.3 DAGScheduler事件转发"></a>2.3 DAGScheduler事件转发</h2><p>上面 submitJob() 内部通过 eventProcessLoop.post() 方法发送 JobSubmited 事件，那该事件如何处理呢？那就需要看看 DAGSchedulerEventProcessLoop 类的具体实现。</p>
+<p>DAGSchedulerEventProcessLoop 类继承自 EventLoop 类，可以看到 post() 方法在 DAGSchedulerEventProcessLoop 并没有定义，因此一定是其唯一父类 EventLoop 定义的。EventLoop 的实现是典型的<code>生产者-消费者模型</code>，通过 post() 生产数据到阻塞队列 eventQueue，然后创建异步线程从队列中取出事件，并交给对应的处理器处理。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/util/EventLoop.scala</span></span><br><span class="line"><span class="keyword">private</span>[spark] <span class="keyword">abstract</span> <span class="class"><span class="keyword">class</span> <span class="title">EventLoop</span>[<span class="type">E</span>](<span class="params">name: <span class="type">String</span></span>) <span class="keyword">extends</span> <span class="title">Logging</span> </span>&#123;</span><br><span class="line">  <span class="comment">// 定义事件阻塞队列，接收事件</span></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">val</span> eventQueue: <span class="type">BlockingQueue</span>[<span class="type">E</span>] = <span class="keyword">new</span> <span class="type">LinkedBlockingDeque</span>[<span class="type">E</span>]()</span><br><span class="line"></span><br><span class="line">  <span class="comment">// 内部独立线程通过 eventQueue.take() 消费事件，并通过 onReceive() 方法转发事件</span></span><br><span class="line">  <span class="keyword">private</span>[spark] <span class="keyword">val</span> eventThread = <span class="keyword">new</span> <span class="type">Thread</span>(name) &#123;</span><br><span class="line">    setDaemon(<span class="literal">true</span>)</span><br><span class="line"></span><br><span class="line">    <span class="keyword">override</span> <span class="function"><span class="keyword">def</span> <span class="title">run</span></span>(): <span class="type">Unit</span> = &#123;</span><br><span class="line">      <span class="keyword">try</span> &#123;</span><br><span class="line">        <span class="keyword">while</span> (!stopped.get) &#123;</span><br><span class="line">          <span class="comment">// 从队列中取出事件</span></span><br><span class="line">          <span class="keyword">val</span> event = eventQueue.take()</span><br><span class="line">          <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="comment">// 转发事件</span></span><br><span class="line">            onReceive(event)</span><br><span class="line">          &#125; <span class="keyword">catch</span> &#123;</span><br><span class="line">            <span class="keyword">case</span> <span class="type">NonFatal</span>(e) =&gt;</span><br><span class="line">              <span class="keyword">try</span> &#123;</span><br><span class="line">                onError(e)</span><br><span class="line">              &#125; <span class="keyword">catch</span> &#123;</span><br><span class="line">                <span class="keyword">case</span> <span class="type">NonFatal</span>(e) =&gt; logError(<span class="string">&quot;Unexpected error in &quot;</span> + name, e)</span><br><span class="line">              &#125;</span><br><span class="line">          &#125;</span><br><span class="line">        &#125;</span><br><span class="line">      &#125; <span class="keyword">catch</span> &#123;</span><br><span class="line">        <span class="keyword">case</span> ie: <span class="type">InterruptedException</span> =&gt; <span class="comment">// exit even if eventQueue is not empty</span></span><br><span class="line">        <span class="keyword">case</span> <span class="type">NonFatal</span>(e) =&gt; logError(<span class="string">&quot;Unexpected error in &quot;</span> + name, e)</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="comment">// DAGScheduler 内部调用 eventProcessLoop.start() 启动 EventLoop 服务</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">start</span></span>(): <span class="type">Unit</span> = &#123;</span><br><span class="line">    <span class="keyword">if</span> (stopped.get) &#123;</span><br><span class="line">      <span class="keyword">throw</span> <span class="keyword">new</span> <span class="type">IllegalStateException</span>(name + <span class="string">&quot; has already been stopped&quot;</span>)</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="comment">// Call onStart before starting the event thread to make sure it happens before onReceive</span></span><br><span class="line">    onStart()</span><br><span class="line">    <span class="comment">// 启动独立线程消费事件</span></span><br><span class="line">    eventThread.start()</span><br><span class="line">  &#125;</span><br><span class="line">  </span><br><span class="line">  <span class="comment">// 向队列中添加事件</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">post</span></span>(event: <span class="type">E</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">    eventQueue.put(event)</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="comment">// EventLoop 抽象类的方法，内部没有具体实现</span></span><br><span class="line">  <span class="keyword">protected</span> <span class="function"><span class="keyword">def</span> <span class="title">onReceive</span></span>(event: <span class="type">E</span>): <span class="type">Unit</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>前面通过 eventProcessLoop.post() 发送 JobSubmitted 事件，添加到阻塞队列，异步线程边阻塞地从队列中取出事件并转发给对应的处理器处理，真正的处理方法为 onReceive()，但 EventLoop 抽象类中的 onReceive() 方法并没有具体实现，因此一定是唯一子类 DAGSchedulerEventProcessLoop 去处理 onReceive() 方法。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/DAGScheduler.scala</span></span><br><span class="line"><span class="keyword">private</span>[scheduler] <span class="class"><span class="keyword">class</span> <span class="title">DAGSchedulerEventProcessLoop</span>(<span class="params">dagScheduler: <span class="type">DAGScheduler</span></span>)</span></span><br><span class="line">  <span class="keyword">extends</span> <span class="type">EventLoop</span>[<span class="type">DAGSchedulerEvent</span>](<span class="string">&quot;dag-scheduler-event-loop&quot;</span>) <span class="keyword">with</span> <span class="type">Logging</span> &#123;</span><br><span class="line"></span><br><span class="line">  <span class="keyword">private</span>[<span class="keyword">this</span>] <span class="keyword">val</span> timer = dagScheduler.metricsSource.messageProcessingTimer</span><br><span class="line"></span><br><span class="line">  <span class="comment">// EventLoop 异步线程取出事件后真正的处理位置</span></span><br><span class="line">  <span class="keyword">override</span> <span class="function"><span class="keyword">def</span> <span class="title">onReceive</span></span>(event: <span class="type">DAGSchedulerEvent</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">    <span class="keyword">val</span> timerContext = timer.time()</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">      doOnReceive(event)</span><br><span class="line">    &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">      timerContext.stop()</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="comment">// 根据不同的事件类型执行相应逻辑</span></span><br><span class="line">  <span class="keyword">private</span> <span class="function"><span class="keyword">def</span> <span class="title">doOnReceive</span></span>(event: <span class="type">DAGSchedulerEvent</span>): <span class="type">Unit</span> = event <span class="keyword">match</span> &#123;</span><br><span class="line">    <span class="keyword">case</span> <span class="type">JobSubmitted</span>(jobId, rdd, func, partitions, callSite, listener, properties) =&gt;</span><br><span class="line">      dagScheduler.handleJobSubmitted(jobId, rdd, func, partitions, callSite, listener, properties)</span><br><span class="line"></span><br><span class="line">    <span class="keyword">case</span> <span class="type">MapStageSubmitted</span>(jobId, dependency, callSite, listener, properties) =&gt;</span><br><span class="line">      dagScheduler.handleMapStageSubmitted(jobId, dependency, callSite, listener, properties)</span><br><span class="line"></span><br><span class="line">    <span class="keyword">case</span> <span class="type">StageCancelled</span>(stageId, reason) =&gt;</span><br><span class="line">      dagScheduler.handleStageCancellation(stageId, reason)</span><br><span class="line"></span><br><span class="line">    <span class="keyword">case</span> <span class="type">JobCancelled</span>(jobId, reason) =&gt;</span><br><span class="line">      dagScheduler.handleJobCancellation(jobId, reason)</span><br><span class="line"></span><br><span class="line">    <span class="keyword">case</span> <span class="type">JobGroupCancelled</span>(groupId) =&gt;</span><br><span class="line">      dagScheduler.handleJobGroupCancelled(groupId)</span><br><span class="line">    ...</span><br><span class="line">  &#125;</span><br><span class="line">  ...</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="2-4-Stage执行调度"><a href="#2-4-Stage执行调度" class="headerlink" title="2.4 Stage执行调度"></a>2.4 Stage执行调度</h2><p>DAGScheduler#handleJobSubmitted() 方法真正处理 JobSubmitted 事件，负责 finalStage 的创建和 stage 的划分与提交工作。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/DAGScheduler.scala</span></span><br><span class="line">  <span class="keyword">private</span>[scheduler] <span class="function"><span class="keyword">def</span> <span class="title">handleJobSubmitted</span></span>(jobId: <span class="type">Int</span>,</span><br><span class="line">      finalRDD: <span class="type">RDD</span>[_],</span><br><span class="line">      func: (<span class="type">TaskContext</span>, <span class="type">Iterator</span>[_]) =&gt; _,</span><br><span class="line">      partitions: <span class="type">Array</span>[<span class="type">Int</span>],</span><br><span class="line">      callSite: <span class="type">CallSite</span>,</span><br><span class="line">      listener: <span class="type">JobListener</span>,</span><br><span class="line">      properties: <span class="type">Properties</span>) &#123;</span><br><span class="line">    <span class="keyword">var</span> finalStage: <span class="type">ResultStage</span> = <span class="literal">null</span></span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">			<span class="comment">// 关键：根据最后一个RDD，回溯创建 finalStage</span></span><br><span class="line">      finalStage = createResultStage(finalRDD, func, partitions, jobId, callSite)</span><br><span class="line">    &#125; <span class="keyword">catch</span> &#123;</span><br><span class="line">      <span class="keyword">case</span> e: <span class="type">BarrierJobSlotsNumberCheckFailed</span> =&gt;</span><br><span class="line">        logWarning(<span class="string">s&quot;The job <span class="subst">$jobId</span> requires to run a barrier stage that requires more slots &quot;</span> +</span><br><span class="line">          <span class="string">&quot;than the total number of slots in the cluster currently.&quot;</span>)</span><br><span class="line">        <span class="comment">// If jobId doesn&#x27;t exist in the map, Scala coverts its value null to 0: Int automatically.</span></span><br><span class="line">        <span class="keyword">val</span> numCheckFailures = barrierJobIdToNumTasksCheckFailures.compute(jobId,</span><br><span class="line">          <span class="keyword">new</span> <span class="type">BiFunction</span>[<span class="type">Int</span>, <span class="type">Int</span>, <span class="type">Int</span>] &#123;</span><br><span class="line">            <span class="keyword">override</span> <span class="function"><span class="keyword">def</span> <span class="title">apply</span></span>(key: <span class="type">Int</span>, value: <span class="type">Int</span>): <span class="type">Int</span> = value + <span class="number">1</span></span><br><span class="line">          &#125;)</span><br><span class="line">        <span class="keyword">if</span> (numCheckFailures &lt;= maxFailureNumTasksCheck) &#123;</span><br><span class="line">          messageScheduler.schedule(</span><br><span class="line">            <span class="keyword">new</span> <span class="type">Runnable</span> &#123;</span><br><span class="line">              <span class="keyword">override</span> <span class="function"><span class="keyword">def</span> <span class="title">run</span></span>(): <span class="type">Unit</span> = eventProcessLoop.post(<span class="type">JobSubmitted</span>(jobId, finalRDD, func,</span><br><span class="line">                partitions, callSite, listener, properties))</span><br><span class="line">            &#125;,</span><br><span class="line">            timeIntervalNumTasksCheck,</span><br><span class="line">            <span class="type">TimeUnit</span>.<span class="type">SECONDS</span></span><br><span class="line">          )</span><br><span class="line">          <span class="keyword">return</span></span><br><span class="line">        &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">          <span class="comment">// Job failed, clear internal data.</span></span><br><span class="line">          barrierJobIdToNumTasksCheckFailures.remove(jobId)</span><br><span class="line">          listener.jobFailed(e)</span><br><span class="line">          <span class="keyword">return</span></span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">      <span class="keyword">case</span> e: <span class="type">Exception</span> =&gt;</span><br><span class="line">        logWarning(<span class="string">&quot;Creating new stage failed due to exception - job: &quot;</span> + jobId, e)</span><br><span class="line">        listener.jobFailed(e)</span><br><span class="line">        <span class="keyword">return</span></span><br><span class="line">    &#125;</span><br><span class="line">    <span class="comment">// Job 已提交，清理内部数据</span></span><br><span class="line">    barrierJobIdToNumTasksCheckFailures.remove(jobId)</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 根据最后一个调度阶段 finalStage 创建 ActiveJob</span></span><br><span class="line">    <span class="keyword">val</span> job = <span class="keyword">new</span> <span class="type">ActiveJob</span>(jobId, finalStage, callSite, listener, properties)</span><br><span class="line">    clearCacheLocs()</span><br><span class="line"></span><br><span class="line">    <span class="keyword">val</span> jobSubmissionTime = clock.getTimeMillis()</span><br><span class="line">    jobIdToActiveJob(jobId) = job</span><br><span class="line">    activeJobs += job</span><br><span class="line">    finalStage.setActiveJob(job)</span><br><span class="line">    <span class="keyword">val</span> stageIds = jobIdToStageIds(jobId).toArray</span><br><span class="line">    <span class="keyword">val</span> stageInfos = stageIds.flatMap(id =&gt; stageIdToStage.get(id).map(_.latestInfo))</span><br><span class="line">    <span class="comment">// 向不同 Listener 监听器 发送 SparkListenerJobStart 事件</span></span><br><span class="line">    listenerBus.post(</span><br><span class="line">      <span class="type">SparkListenerJobStart</span>(job.jobId, jobSubmissionTime, stageInfos, properties))</span><br><span class="line">    <span class="comment">// 关键：提交 stage，从最后一个 stage 开始提交</span></span><br><span class="line">    submitStage(finalStage)</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>从最后一个 Stage 开始提交，不停地递归向前寻找没有父 Stage 的 Stage，当没有某个 Stage 没有父 Stage 依赖，则通过 submitMissingTasks 正式提交该 Stage。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/DAGScheduler.scala</span></span><br><span class="line">	<span class="comment">// 提交stage，从没有父 stage 的开始提交</span></span><br><span class="line">  <span class="keyword">private</span> <span class="function"><span class="keyword">def</span> <span class="title">submitStage</span></span>(stage: <span class="type">Stage</span>) &#123;</span><br><span class="line">    <span class="keyword">val</span> jobId = activeJobForStage(stage)</span><br><span class="line">    <span class="keyword">if</span> (jobId.isDefined) &#123;</span><br><span class="line">      logDebug(<span class="string">s&quot;submitStage(<span class="subst">$stage</span> (name=<span class="subst">$&#123;stage.name&#125;</span>;&quot;</span> +</span><br><span class="line">        <span class="string">s&quot;jobs=<span class="subst">$&#123;stage.jobIds.toSeq.sorted.mkString(&quot;,&quot;)&#125;</span>))&quot;</span>)</span><br><span class="line">      <span class="keyword">if</span> (!waitingStages(stage) &amp;&amp; !runningStages(stage) &amp;&amp; !failedStages(stage)) &#123;</span><br><span class="line">        <span class="comment">// 获取没有父stage的stage</span></span><br><span class="line">        <span class="keyword">val</span> missing = getMissingParentStages(stage).sortBy(_.id)</span><br><span class="line">        logDebug(<span class="string">&quot;missing: &quot;</span> + missing)</span><br><span class="line">        <span class="comment">// 如果没有父 stage</span></span><br><span class="line">        <span class="keyword">if</span> (missing.isEmpty) &#123;</span><br><span class="line">          logInfo(<span class="string">&quot;Submitting &quot;</span> + stage + <span class="string">&quot; (&quot;</span> + stage.rdd + <span class="string">&quot;), which has no missing parents&quot;</span>)</span><br><span class="line">          <span class="comment">// 关键：提交 Task 任务</span></span><br><span class="line">          submitMissingTasks(stage, jobId.get)</span><br><span class="line">        &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">          <span class="keyword">for</span> (parent &lt;- missing) &#123;</span><br><span class="line">            <span class="comment">// 递归调用，直到获取没有父stage的stage</span></span><br><span class="line">            submitStage(parent)</span><br><span class="line">          &#125;</span><br><span class="line">          <span class="comment">// 当前stage有父stage依赖，则加入waitingStages等待父stage提交完</span></span><br><span class="line">          waitingStages += stage</span><br><span class="line">        &#125;</span><br><span class="line">      &#125;</span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">      abortStage(stage, <span class="string">&quot;No active job for stage &quot;</span> + stage.id, <span class="type">None</span>)</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>获取当前 Stage 缺失的父 Stage。有点类似树的深度遍历，从 finalStage 开始回溯查找没有父依赖的 Stage 集合。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/DAGScheduler.scala</span></span><br><span class="line">	<span class="comment">// 类似树的深度遍历，找到缺失父stage的stage</span></span><br><span class="line">  <span class="keyword">private</span> <span class="function"><span class="keyword">def</span> <span class="title">getMissingParentStages</span></span>(stage: <span class="type">Stage</span>): <span class="type">List</span>[<span class="type">Stage</span>] = &#123;</span><br><span class="line">    <span class="keyword">val</span> missing = <span class="keyword">new</span> <span class="type">HashSet</span>[<span class="type">Stage</span>]</span><br><span class="line">    <span class="keyword">val</span> visited = <span class="keyword">new</span> <span class="type">HashSet</span>[<span class="type">RDD</span>[_]]</span><br><span class="line">    <span class="comment">// 存放等待访问的窄依赖RDD</span></span><br><span class="line">    <span class="keyword">val</span> waitingForVisit = <span class="keyword">new</span> <span class="type">ArrayStack</span>[<span class="type">RDD</span>[_]]</span><br><span class="line">    <span class="function"><span class="keyword">def</span> <span class="title">visit</span></span>(rdd: <span class="type">RDD</span>[_]) &#123;</span><br><span class="line">      <span class="keyword">if</span> (!visited(rdd)) &#123;</span><br><span class="line">        <span class="comment">// 标记访问过的RDD</span></span><br><span class="line">        visited += rdd</span><br><span class="line">        <span class="keyword">val</span> rddHasUncachedPartitions = getCacheLocs(rdd).contains(<span class="type">Nil</span>)</span><br><span class="line">        <span class="keyword">if</span> (rddHasUncachedPartitions) &#123;</span><br><span class="line">          <span class="keyword">for</span> (dep &lt;- rdd.dependencies) &#123;</span><br><span class="line">            dep <span class="keyword">match</span> &#123;</span><br><span class="line">              <span class="keyword">case</span> shufDep: <span class="type">ShuffleDependency</span>[_, _, _] =&gt;</span><br><span class="line">                <span class="comment">// 通过宽依赖进行stage的划分</span></span><br><span class="line">                <span class="keyword">val</span> mapStage = getOrCreateShuffleMapStage(shufDep, stage.firstJobId)</span><br><span class="line">                <span class="comment">// 如果stage是未激活的，则加入missing集合中</span></span><br><span class="line">                <span class="keyword">if</span> (!mapStage.isAvailable) &#123;</span><br><span class="line">                  missing += mapStage</span><br><span class="line">                &#125;</span><br><span class="line">              <span class="keyword">case</span> narrowDep: <span class="type">NarrowDependency</span>[_] =&gt;</span><br><span class="line">                <span class="comment">// 窄依赖直接加入waitingForVisit集合</span></span><br><span class="line">                waitingForVisit.push(narrowDep.rdd)</span><br><span class="line">            &#125;</span><br><span class="line">          &#125;</span><br><span class="line">        &#125;</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="comment">// 将当前stage的RDD放入waitingForVisit数组，表示从最后一个RDD开始向前遍历递归树</span></span><br><span class="line">    waitingForVisit.push(stage.rdd)</span><br><span class="line">    <span class="comment">// 深度遍历递归调用</span></span><br><span class="line">    <span class="keyword">while</span> (waitingForVisit.nonEmpty) &#123;</span><br><span class="line">      visit(waitingForVisit.pop())</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="comment">// 返回父stage</span></span><br><span class="line">    missing.toList</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>如果当前 Stage 没有父依赖，则提交该 Stage。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br><span class="line">89</span><br><span class="line">90</span><br><span class="line">91</span><br><span class="line">92</span><br><span class="line">93</span><br><span class="line">94</span><br><span class="line">95</span><br><span class="line">96</span><br><span class="line">97</span><br><span class="line">98</span><br><span class="line">99</span><br><span class="line">100</span><br><span class="line">101</span><br><span class="line">102</span><br><span class="line">103</span><br><span class="line">104</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/DAGScheduler.scala</span></span><br><span class="line">  <span class="keyword">private</span> <span class="function"><span class="keyword">def</span> <span class="title">submitMissingTasks</span></span>(stage: <span class="type">Stage</span>, jobId: <span class="type">Int</span>) &#123;</span><br><span class="line">    logDebug(<span class="string">&quot;submitMissingTasks(&quot;</span> + stage + <span class="string">&quot;)&quot;</span>)</span><br><span class="line"></span><br><span class="line">    <span class="comment">// First figure out the indexes of partition ids to compute.</span></span><br><span class="line">    <span class="keyword">val</span> partitionsToCompute: <span class="type">Seq</span>[<span class="type">Int</span>] = stage.findMissingPartitions()</span><br><span class="line"></span><br><span class="line">    <span class="comment">// Use the scheduling pool, job group, description, etc. from an ActiveJob associated</span></span><br><span class="line">    <span class="comment">// with this Stage</span></span><br><span class="line">    <span class="keyword">val</span> properties = jobIdToActiveJob(jobId).properties</span><br><span class="line">		<span class="comment">// 将当前stage加入到运行中stage集合</span></span><br><span class="line">    runningStages += stage</span><br><span class="line"></span><br><span class="line">    stage <span class="keyword">match</span> &#123;</span><br><span class="line">      <span class="keyword">case</span> s: <span class="type">ShuffleMapStage</span> =&gt;</span><br><span class="line">        outputCommitCoordinator.stageStart(stage = s.id, maxPartitionId = s.numPartitions - <span class="number">1</span>)</span><br><span class="line">      <span class="keyword">case</span> s: <span class="type">ResultStage</span> =&gt;</span><br><span class="line">        outputCommitCoordinator.stageStart(</span><br><span class="line">          stage = s.id, maxPartitionId = s.rdd.partitions.length - <span class="number">1</span>)</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">val</span> taskIdToLocations: <span class="type">Map</span>[<span class="type">Int</span>, <span class="type">Seq</span>[<span class="type">TaskLocation</span>]] = <span class="keyword">try</span> &#123;</span><br><span class="line">      stage <span class="keyword">match</span> &#123;</span><br><span class="line">        <span class="keyword">case</span> s: <span class="type">ShuffleMapStage</span> =&gt;</span><br><span class="line">          partitionsToCompute.map &#123; id =&gt; (id, getPreferredLocs(stage.rdd, id))&#125;.toMap</span><br><span class="line">        <span class="keyword">case</span> s: <span class="type">ResultStage</span> =&gt;</span><br><span class="line">          partitionsToCompute.map &#123; id =&gt;</span><br><span class="line">            <span class="keyword">val</span> p = s.partitions(id)</span><br><span class="line">            (id, getPreferredLocs(stage.rdd, p))</span><br><span class="line">          &#125;.toMap</span><br><span class="line">      &#125;</span><br><span class="line">    &#125; <span class="keyword">catch</span> &#123;</span><br><span class="line">      <span class="keyword">case</span> <span class="type">NonFatal</span>(e) =&gt;</span><br><span class="line">        stage.makeNewStageAttempt(partitionsToCompute.size)</span><br><span class="line">        listenerBus.post(<span class="type">SparkListenerStageSubmitted</span>(stage.latestInfo, properties))</span><br><span class="line">        abortStage(stage, <span class="string">s&quot;Task creation failed: <span class="subst">$e</span>\n<span class="subst">$&#123;Utils.exceptionString(e)&#125;</span>&quot;</span>, <span class="type">Some</span>(e))</span><br><span class="line">        runningStages -= stage</span><br><span class="line">        <span class="keyword">return</span></span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    stage.makeNewStageAttempt(partitionsToCompute.size, taskIdToLocations.values.toSeq)</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (partitionsToCompute.nonEmpty) &#123;</span><br><span class="line">      stage.latestInfo.submissionTime = <span class="type">Some</span>(clock.getTimeMillis())</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="comment">// 向 ListenerBus 发送 SparkListenerStageSubmitted 事件</span></span><br><span class="line">    listenerBus.post(<span class="type">SparkListenerStageSubmitted</span>(stage.latestInfo, properties))</span><br><span class="line">    ...</span><br><span class="line">    </span><br><span class="line">    <span class="keyword">val</span> tasks: <span class="type">Seq</span>[<span class="type">Task</span>[_]] = <span class="keyword">try</span> &#123;</span><br><span class="line">      <span class="keyword">val</span> serializedTaskMetrics = closureSerializer.serialize(stage.latestInfo.taskMetrics).array()</span><br><span class="line">      stage <span class="keyword">match</span> &#123;</span><br><span class="line">        <span class="keyword">case</span> stage: <span class="type">ShuffleMapStage</span> =&gt;</span><br><span class="line">          stage.pendingPartitions.clear()</span><br><span class="line">          partitionsToCompute.map &#123; id =&gt;</span><br><span class="line">            <span class="keyword">val</span> locs = taskIdToLocations(id)</span><br><span class="line">            <span class="keyword">val</span> part = partitions(id)</span><br><span class="line">            stage.pendingPartitions += id</span><br><span class="line">            <span class="keyword">new</span> <span class="type">ShuffleMapTask</span>(stage.id, stage.latestInfo.attemptNumber,</span><br><span class="line">              taskBinary, part, locs, properties, serializedTaskMetrics, <span class="type">Option</span>(jobId),</span><br><span class="line">              <span class="type">Option</span>(sc.applicationId), sc.applicationAttemptId, stage.rdd.isBarrier())</span><br><span class="line">          &#125;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">case</span> stage: <span class="type">ResultStage</span> =&gt;</span><br><span class="line">          partitionsToCompute.map &#123; id =&gt;</span><br><span class="line">            <span class="keyword">val</span> p: <span class="type">Int</span> = stage.partitions(id)</span><br><span class="line">            <span class="keyword">val</span> part = partitions(p)</span><br><span class="line">            <span class="keyword">val</span> locs = taskIdToLocations(id)</span><br><span class="line">            <span class="keyword">new</span> <span class="type">ResultTask</span>(stage.id, stage.latestInfo.attemptNumber,</span><br><span class="line">              taskBinary, part, locs, id, properties, serializedTaskMetrics,</span><br><span class="line">              <span class="type">Option</span>(jobId), <span class="type">Option</span>(sc.applicationId), sc.applicationAttemptId,</span><br><span class="line">              stage.rdd.isBarrier())</span><br><span class="line">          &#125;</span><br><span class="line">      &#125;</span><br><span class="line">    &#125; <span class="keyword">catch</span> &#123;</span><br><span class="line">      <span class="keyword">case</span> <span class="type">NonFatal</span>(e) =&gt;</span><br><span class="line">        abortStage(stage, <span class="string">s&quot;Task creation failed: <span class="subst">$e</span>\n<span class="subst">$&#123;Utils.exceptionString(e)&#125;</span>&quot;</span>, <span class="type">Some</span>(e))</span><br><span class="line">        runningStages -= stage</span><br><span class="line">        <span class="keyword">return</span></span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (tasks.size &gt; <span class="number">0</span>) &#123;</span><br><span class="line">      logInfo(<span class="string">s&quot;Submitting <span class="subst">$&#123;tasks.size&#125;</span> missing tasks from <span class="subst">$stage</span> (<span class="subst">$&#123;stage.rdd&#125;</span>) (first 15 &quot;</span> +</span><br><span class="line">        <span class="string">s&quot;tasks are for partitions <span class="subst">$&#123;tasks.take(15).map(_.partitionId)&#125;</span>)&quot;</span>)</span><br><span class="line">      <span class="comment">// 关键：调用TaskScheduler提交Task任务</span></span><br><span class="line">      taskScheduler.submitTasks(<span class="keyword">new</span> <span class="type">TaskSet</span>(</span><br><span class="line">        tasks.toArray, stage.id, stage.latestInfo.attemptNumber, jobId, properties))</span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">			<span class="comment">// 标记调度阶段已经结束</span></span><br><span class="line">      markStageAsFinished(stage, <span class="type">None</span>)</span><br><span class="line"></span><br><span class="line">      stage <span class="keyword">match</span> &#123;</span><br><span class="line">        <span class="keyword">case</span> stage: <span class="type">ShuffleMapStage</span> =&gt;</span><br><span class="line">          logDebug(<span class="string">s&quot;Stage <span class="subst">$&#123;stage&#125;</span> is actually done; &quot;</span> +</span><br><span class="line">              <span class="string">s&quot;(available: <span class="subst">$&#123;stage.isAvailable&#125;</span>,&quot;</span> +</span><br><span class="line">              <span class="string">s&quot;available outputs: <span class="subst">$&#123;stage.numAvailableOutputs&#125;</span>,&quot;</span> +</span><br><span class="line">              <span class="string">s&quot;partitions: <span class="subst">$&#123;stage.numPartitions&#125;</span>)&quot;</span>)</span><br><span class="line">          markMapStageJobsAsFinished(stage)</span><br><span class="line">        <span class="keyword">case</span> stage : <span class="type">ResultStage</span> =&gt;</span><br><span class="line">          logDebug(<span class="string">s&quot;Stage <span class="subst">$&#123;stage&#125;</span> is actually done; (partitions: <span class="subst">$&#123;stage.numPartitions&#125;</span>)&quot;</span>)</span><br><span class="line">      &#125;</span><br><span class="line">      <span class="comment">// 提交子Stage</span></span><br><span class="line">      submitWaitingChildStages(stage)</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>提交完当前 Stage 后，选择出当前 Stage 的子依赖 Stage，然后依次提交。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/DAGScheduler.scala</span></span><br><span class="line">  <span class="keyword">private</span> <span class="function"><span class="keyword">def</span> <span class="title">submitWaitingChildStages</span></span>(parent: <span class="type">Stage</span>) &#123;</span><br><span class="line">		<span class="comment">// 从waitingStages中拿出当前stage的子stages</span></span><br><span class="line">    <span class="keyword">val</span> childStages = waitingStages.filter(_.parents.contains(parent)).toArray</span><br><span class="line">    <span class="comment">// 从waitingStages移除（表示子stages不再等待，即将提交）</span></span><br><span class="line">    waitingStages --= childStages</span><br><span class="line">    <span class="comment">// 遍历提交子stages</span></span><br><span class="line">    <span class="keyword">for</span> (stage &lt;- childStages.sortBy(_.firstJobId)) &#123;</span><br><span class="line">      submitStage(stage)</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="2-5-提交执行任务"><a href="#2-5-提交执行任务" class="headerlink" title="2.5 提交执行任务"></a>2.5 提交执行任务</h2><p>选择了没有父依赖的 Stage 开始提交后，则开始提交该 Stage 的 TaskSet 集合。提交 Task 的关键在于 CoarseGrainedSchedulerBackend 调度后端接口，通过该接口向 Executor 端发送 RPC 请求，</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/TaskSchedulerImpl.scala</span></span><br><span class="line">  <span class="keyword">override</span> <span class="function"><span class="keyword">def</span> <span class="title">submitTasks</span></span>(taskSet: <span class="type">TaskSet</span>) &#123;</span><br><span class="line">    <span class="keyword">val</span> tasks = taskSet.tasks</span><br><span class="line">    logInfo(<span class="string">&quot;Adding task set &quot;</span> + taskSet.id + <span class="string">&quot; with &quot;</span> + tasks.length + <span class="string">&quot; tasks&quot;</span>)</span><br><span class="line">    <span class="keyword">this</span>.synchronized &#123;</span><br><span class="line">      <span class="keyword">val</span> manager = createTaskSetManager(taskSet, maxTaskFailures)</span><br><span class="line">      <span class="keyword">val</span> stage = taskSet.stageId</span><br><span class="line">      <span class="keyword">val</span> stageTaskSets =</span><br><span class="line">        taskSetsByStageIdAndAttempt.getOrElseUpdate(stage, <span class="keyword">new</span> <span class="type">HashMap</span>[<span class="type">Int</span>, <span class="type">TaskSetManager</span>])</span><br><span class="line"></span><br><span class="line">      stageTaskSets.foreach &#123; <span class="keyword">case</span> (_, ts) =&gt;</span><br><span class="line">        ts.isZombie = <span class="literal">true</span></span><br><span class="line">      &#125;</span><br><span class="line">      stageTaskSets(taskSet.stageAttemptId) = manager</span><br><span class="line">      schedulableBuilder.addTaskSetManager(manager, manager.taskSet.properties)</span><br><span class="line"></span><br><span class="line">      <span class="keyword">if</span> (!isLocal &amp;&amp; !hasReceivedTask) &#123;</span><br><span class="line">        <span class="comment">// 定时检测是否有足够资源运行Task</span></span><br><span class="line">        starvationTimer.scheduleAtFixedRate(<span class="keyword">new</span> <span class="type">TimerTask</span>() &#123;</span><br><span class="line">          <span class="keyword">override</span> <span class="function"><span class="keyword">def</span> <span class="title">run</span></span>() &#123;</span><br><span class="line">            <span class="keyword">if</span> (!hasLaunchedTask) &#123;</span><br><span class="line">              logWarning(<span class="string">&quot;Initial job has not accepted any resources; &quot;</span> +</span><br><span class="line">                <span class="string">&quot;check your cluster UI to ensure that workers are registered &quot;</span> +</span><br><span class="line">                <span class="string">&quot;and have sufficient resources&quot;</span>)</span><br><span class="line">            &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">              <span class="keyword">this</span>.cancel()</span><br><span class="line">            &#125;</span><br><span class="line">          &#125;</span><br><span class="line">        &#125;, <span class="type">STARVATION_TIMEOUT_MS</span>, <span class="type">STARVATION_TIMEOUT_MS</span>)</span><br><span class="line">      &#125;</span><br><span class="line">      hasReceivedTask = <span class="literal">true</span></span><br><span class="line">    &#125;</span><br><span class="line">    <span class="comment">// 关键：后台进程调用reviveOffers方法分配资源并且运行</span></span><br><span class="line">    <span class="comment">// backend类型为CoarseGrainedSchedulerBackend</span></span><br><span class="line">    backend.reviveOffers()</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>调用 driverEndpoint 发送 ReviveOffers 消息.</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/cluster/CoarseGrainedSchedulerBackend.scala</span></span><br><span class="line">  <span class="keyword">override</span> <span class="function"><span class="keyword">def</span> <span class="title">reviveOffers</span></span>() &#123;</span><br><span class="line">    <span class="comment">// driverEndpoint是DriverEndpoint的RpcEndpointRef引用，发送RPC请求ReviveOffers</span></span><br><span class="line">    driverEndpoint.send(<span class="type">ReviveOffers</span>)</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>RPC Endpoint 根据消息类型处理 ReviveOffers 消息。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/cluster/CoarseGrainedSchedulerBackend.scala</span></span><br><span class="line"> <span class="class"><span class="keyword">class</span> <span class="title">DriverEndpoint</span>(<span class="params">override val rpcEnv: <span class="type">RpcEnv</span>, sparkProperties: <span class="type">Seq</span>[(<span class="type">String</span>, <span class="type">String</span></span>)])</span></span><br><span class="line">    <span class="keyword">extends</span> <span class="type">ThreadSafeRpcEndpoint</span> <span class="keyword">with</span> <span class="type">Logging</span> &#123;</span><br><span class="line">   <span class="keyword">override</span> <span class="function"><span class="keyword">def</span> <span class="title">receive</span></span>: <span class="type">PartialFunction</span>[<span class="type">Any</span>, <span class="type">Unit</span>] = &#123;</span><br><span class="line">      <span class="keyword">case</span> <span class="type">StatusUpdate</span>(executorId, taskId, state, data) =&gt;</span><br><span class="line">				...</span><br><span class="line">      <span class="comment">// 处理ReviveOffers请求</span></span><br><span class="line">      <span class="keyword">case</span> <span class="type">ReviveOffers</span> =&gt;</span><br><span class="line">        makeOffers()</span><br><span class="line">			...</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>处理消息的具体逻辑，这里可以看到关键的 launchTasks() 方法。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/cluster/CoarseGrainedSchedulerBackend.scala</span></span><br><span class="line">    <span class="keyword">private</span> <span class="function"><span class="keyword">def</span> <span class="title">makeOffers</span></span>() &#123;</span><br><span class="line">      <span class="comment">// Make sure no executor is killed while some task is launching on it</span></span><br><span class="line">      <span class="keyword">val</span> taskDescs = withLock &#123;</span><br><span class="line">        <span class="comment">// Filter out executors under killing</span></span><br><span class="line">        <span class="keyword">val</span> activeExecutors = executorDataMap.filterKeys(executorIsAlive)</span><br><span class="line">        <span class="keyword">val</span> workOffers = activeExecutors.map &#123;</span><br><span class="line">          <span class="keyword">case</span> (id, executorData) =&gt;</span><br><span class="line">            <span class="keyword">new</span> <span class="type">WorkerOffer</span>(id, executorData.executorHost, executorData.freeCores,</span><br><span class="line">              <span class="type">Some</span>(executorData.executorAddress.hostPort))</span><br><span class="line">        &#125;.toIndexedSeq</span><br><span class="line">        <span class="comment">// </span></span><br><span class="line">        scheduler.resourceOffers(workOffers)</span><br><span class="line">      &#125;</span><br><span class="line">      <span class="keyword">if</span> (!taskDescs.isEmpty) &#123;</span><br><span class="line">        <span class="comment">// 关键：运行Task</span></span><br><span class="line">        launchTasks(taskDescs)</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br></pre></td></tr></table></figure>
+
+<p>launchTasks() 方法是 CoarseGrainedSchedulerBackend 类发出的，属于 Driver 端发出运行 Task 的指令，指令通过调用 Executor 端的 RpcEndpointRef 对象向 Executor 端发送 LaunchTask 消息。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/scheduler/cluster/CoarseGrainedSchedulerBackend.scala</span></span><br><span class="line">    <span class="comment">// Launch tasks returned by a set of resource offers</span></span><br><span class="line">    <span class="keyword">private</span> <span class="function"><span class="keyword">def</span> <span class="title">launchTasks</span></span>(tasks: <span class="type">Seq</span>[<span class="type">Seq</span>[<span class="type">TaskDescription</span>]]) &#123;</span><br><span class="line">      <span class="keyword">for</span> (task &lt;- tasks.flatten) &#123;</span><br><span class="line">        <span class="keyword">val</span> serializedTask = <span class="type">TaskDescription</span>.encode(task)</span><br><span class="line">        <span class="keyword">if</span> (serializedTask.limit() &gt;= maxRpcMessageSize) &#123;</span><br><span class="line">          <span class="type">Option</span>(scheduler.taskIdToTaskSetManager.get(task.taskId)).foreach &#123; taskSetMgr =&gt;</span><br><span class="line">            <span class="keyword">try</span> &#123;</span><br><span class="line">              <span class="keyword">var</span> msg = <span class="string">&quot;Serialized task %s:%d was %d bytes, which exceeds max allowed: &quot;</span> +</span><br><span class="line">                <span class="string">&quot;spark.rpc.message.maxSize (%d bytes). Consider increasing &quot;</span> +</span><br><span class="line">                <span class="string">&quot;spark.rpc.message.maxSize or using broadcast variables for large values.&quot;</span></span><br><span class="line">              msg = msg.format(task.taskId, task.index, serializedTask.limit(), maxRpcMessageSize)</span><br><span class="line">              taskSetMgr.abort(msg)</span><br><span class="line">            &#125; <span class="keyword">catch</span> &#123;</span><br><span class="line">              <span class="keyword">case</span> e: <span class="type">Exception</span> =&gt; logError(<span class="string">&quot;Exception in error callback&quot;</span>, e)</span><br><span class="line">            &#125;</span><br><span class="line">          &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">else</span> &#123;</span><br><span class="line">          <span class="keyword">val</span> executorData = executorDataMap(task.executorId)</span><br><span class="line">          executorData.freeCores -= scheduler.<span class="type">CPUS_PER_TASK</span></span><br><span class="line"></span><br><span class="line">          logDebug(<span class="string">s&quot;Launching task <span class="subst">$&#123;task.taskId&#125;</span> on executor id: <span class="subst">$&#123;task.executorId&#125;</span> hostname: &quot;</span> +</span><br><span class="line">            <span class="string">s&quot;<span class="subst">$&#123;executorData.executorHost&#125;</span>.&quot;</span>)</span><br><span class="line">					<span class="comment">// 关键：通过RPC向Executor发送LaunchTask请求</span></span><br><span class="line">          <span class="comment">// executorData.executorEndpoint类型为CoarseGrainedExecutorBackend</span></span><br><span class="line">          executorData.executorEndpoint.send(<span class="type">LaunchTask</span>(<span class="keyword">new</span> <span class="type">SerializableBuffer</span>(serializedTask)))</span><br><span class="line">        &#125;</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br></pre></td></tr></table></figure>
+
+<p>Executor 端的调度后端接口 CoarseGrainedExecutorBackend 根据 LaunchTask 消息类型执行 executor.launchTask() 逻辑。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/executor/CoarseGrainedExecutorBackend.scala</span></span><br><span class="line"><span class="keyword">private</span>[spark] <span class="class"><span class="keyword">class</span> <span class="title">CoarseGrainedExecutorBackend</span>(<span class="params"></span></span></span><br><span class="line"><span class="params"><span class="class">    override val rpcEnv: <span class="type">RpcEnv</span>,</span></span></span><br><span class="line"><span class="params"><span class="class">    driverUrl: <span class="type">String</span>,</span></span></span><br><span class="line"><span class="params"><span class="class">    executorId: <span class="type">String</span>,</span></span></span><br><span class="line"><span class="params"><span class="class">    hostname: <span class="type">String</span>,</span></span></span><br><span class="line"><span class="params"><span class="class">    cores: <span class="type">Int</span>,</span></span></span><br><span class="line"><span class="params"><span class="class">    userClassPath: <span class="type">Seq</span>[<span class="type">URL</span>],</span></span></span><br><span class="line"><span class="params"><span class="class">    env: <span class="type">SparkEnv</span></span>)</span></span><br><span class="line">  <span class="keyword">extends</span> <span class="type">ThreadSafeRpcEndpoint</span> <span class="keyword">with</span> <span class="type">ExecutorBackend</span> <span class="keyword">with</span> <span class="type">Logging</span> &#123;</span><br><span class="line">  <span class="keyword">override</span> <span class="function"><span class="keyword">def</span> <span class="title">receive</span></span>: <span class="type">PartialFunction</span>[<span class="type">Any</span>, <span class="type">Unit</span>] = &#123;</span><br><span class="line">		...</span><br><span class="line">    <span class="comment">// 根据LaunchTask请求运行任务</span></span><br><span class="line">    <span class="keyword">case</span> <span class="type">LaunchTask</span>(data) =&gt;</span><br><span class="line">      <span class="keyword">if</span> (executor == <span class="literal">null</span>) &#123;</span><br><span class="line">        exitExecutor(<span class="number">1</span>, <span class="string">&quot;Received LaunchTask command but executor was null&quot;</span>)</span><br><span class="line">      &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        <span class="keyword">val</span> taskDesc = <span class="type">TaskDescription</span>.decode(data.value)</span><br><span class="line">        logInfo(<span class="string">&quot;Got assigned task &quot;</span> + taskDesc.taskId)</span><br><span class="line">        <span class="comment">// 调用Executor对象运行Task</span></span><br><span class="line">        executor.launchTask(<span class="keyword">this</span>, taskDesc)</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>Executor 端运行 Task 任务，运行的方式是通过预先创建好的线程池，通过线程池运行 TaskRunner 线程。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：core/src/main/scala/org/apache/spark/executor/Executor.scala</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">launchTask</span></span>(context: <span class="type">ExecutorBackend</span>, taskDescription: <span class="type">TaskDescription</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">    <span class="keyword">val</span> tr = <span class="keyword">new</span> <span class="type">TaskRunner</span>(context, taskDescription)</span><br><span class="line">    <span class="comment">// Executor执行Task是通过预先创建好的线程池去执行</span></span><br><span class="line">    runningTasks.put(taskDescription.taskId, tr)</span><br><span class="line">    threadPool.execute(tr)</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// Executor端预先创建好的线程池，用于执行具体的Task</span></span><br><span class="line">  <span class="keyword">private</span> <span class="keyword">val</span> threadPool = &#123;</span><br><span class="line">    <span class="keyword">val</span> threadFactory = <span class="keyword">new</span> <span class="type">ThreadFactoryBuilder</span>()</span><br><span class="line">      .setDaemon(<span class="literal">true</span>)</span><br><span class="line">      .setNameFormat(<span class="string">&quot;Executor task launch worker-%d&quot;</span>)</span><br><span class="line">      .setThreadFactory(<span class="keyword">new</span> <span class="type">ThreadFactory</span> &#123;</span><br><span class="line">        <span class="keyword">override</span> <span class="function"><span class="keyword">def</span> <span class="title">newThread</span></span>(r: <span class="type">Runnable</span>): <span class="type">Thread</span> =</span><br><span class="line">          <span class="keyword">new</span> <span class="type">UninterruptibleThread</span>(r, <span class="string">&quot;unused&quot;</span>) <span class="comment">// thread name will be set by ThreadFactoryBuilder</span></span><br><span class="line">      &#125;)</span><br><span class="line">      .build()</span><br><span class="line">    <span class="type">Executors</span>.newCachedThreadPool(threadFactory).asInstanceOf[<span class="type">ThreadPoolExecutor</span>]</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>至此，Task 在 Executor 端便真正启动执行了。</p>
+<h1 id="参考资源"><a href="#参考资源" class="headerlink" title="参考资源"></a>参考资源</h1><ul>
+<li><p><a target="_blank" rel="noopener" href="https://smartcxr.github.io/2019/05/01/Spark%E4%BD%9C%E4%B8%9A%E6%89%A7%E8%A1%8C%E5%8E%9F%E7%90%86/">Spark作业执行原理</a></p>
+</li>
+<li><p><a target="_blank" rel="noopener" href="https://blog.csdn.net/u011239443/article/details/53911902">深入理解Spark 2.1 Core （二）：DAG调度器的原理与源码分析</a></p>
+</li>
+<li><p><a target="_blank" rel="noopener" href="https://www.cnblogs.com/johnny666888/p/11233982.html">DAG的生成和Stage的划分</a></p>
+</li>
+</ul>
+
+    </div>
+
+    
+    
+    
+
+    <div>
+      
+      <div>
+	 
+		<div style="text-align:center;color:#bfbfbf;font-size:16px;"> 
+			<span>-------- 本文结束 </span> <i class="fa fa-paw"></i> <span> 感谢阅读 --------</span>
+		</div> 
+	
+</div>
+      
+    </div>
+        <div class="reward-container">
+  <div></div>
+  <button onclick="var qr = document.getElementById('qr'); qr.style.display = (qr.style.display === 'none') ? 'block' : 'none';">
+    请我喝杯咖啡~
+  </button>
+  <div id="qr" style="display: none;">
+      
+      <div style="display: inline-block;">
+        <img src="/images/wechatpay.png" alt="笨小康 微信打赏">
+        <p>微信打赏</p>
+      </div>
+      
+      <div style="display: inline-block;">
+        <img src="/images/alipay.png" alt="笨小康 支付宝打赏">
+        <p>支付宝打赏</p>
+      </div>
+
+  </div>
+</div>
+
+
+      <footer class="post-footer">
+          <div class="post-tags">
+              <a href="/tags/Spark/" rel="tag"><i class="fa fa-tag"></i> Spark</a>
+              <a href="/tags/Spark%E6%BA%90%E7%A0%81/" rel="tag"><i class="fa fa-tag"></i> Spark源码</a>
+              <a href="/tags/Spark%E5%8E%9F%E7%90%86/" rel="tag"><i class="fa fa-tag"></i> Spark原理</a>
+          </div>
+
+        
+
+
+        
+    <div class="post-nav">
+      <div class="post-nav-item">
+    <a href="/2021/12/12/Spark-ContextCleaner%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/" rel="prev" title="Spark ContextCleaner源码分析">
+      <i class="fa fa-chevron-left"></i> Spark ContextCleaner源码分析
+    </a></div>
+      <div class="post-nav-item">
+    <a href="/2021/12/19/Spark-HistoryServer%E6%97%A5%E5%BF%97%E8%A7%A3%E6%9E%90%E5%BC%82%E5%B8%B8%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/" rel="next" title="Spark HistoryServer日志解析异常源码分析">
+      Spark HistoryServer日志解析异常源码分析 <i class="fa fa-chevron-right"></i>
+    </a></div>
+    </div>
+      </footer>
+    
+  </article>
+  
+  
+  
+
+
+
+
+          </div>
+          
+
+<script>
+  window.addEventListener('tabs:register', () => {
+    let { activeClass } = CONFIG.comments;
+    if (CONFIG.comments.storage) {
+      activeClass = localStorage.getItem('comments_active') || activeClass;
+    }
+    if (activeClass) {
+      let activeTab = document.querySelector(`a[href="#comment-${activeClass}"]`);
+      if (activeTab) {
+        activeTab.click();
+      }
+    }
+  });
+  if (CONFIG.comments.storage) {
+    window.addEventListener('tabs:click', event => {
+      if (!event.target.matches('.tabs-comment .tab-content .tab-pane')) return;
+      let commentClass = event.target.classList[1];
+      localStorage.setItem('comments_active', commentClass);
+    });
+  }
+</script>
+
+        </div>
+          
+  
+  <div class="toggle sidebar-toggle">
+    <span class="toggle-line toggle-line-first"></span>
+    <span class="toggle-line toggle-line-middle"></span>
+    <span class="toggle-line toggle-line-last"></span>
+  </div>
+
+  <aside class="sidebar">
+    <div class="sidebar-inner">
+
+      <ul class="sidebar-nav motion-element">
+        <li class="sidebar-nav-toc">
+          文章目录
+        </li>
+        <li class="sidebar-nav-overview">
+          站点概览
+        </li>
+      </ul>
+
+      <!--noindex-->
+      <div class="post-toc-wrap sidebar-panel">
+          <div class="post-toc motion-element"><ol class="nav"><li class="nav-item nav-level-1"><a class="nav-link" href="#1-%E4%BD%9C%E4%B8%9A%E6%89%A7%E8%A1%8C%E6%B5%81%E7%A8%8B%E7%AE%80%E4%BB%8B"><span class="nav-text">1. 作业执行流程简介</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#2-%E4%BB%BB%E5%8A%A1%E6%89%A7%E8%A1%8C%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90"><span class="nav-text">2. 任务执行源码分析</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#2-1-%E5%88%9D%E5%A7%8B%E5%8C%96%E6%93%8D%E4%BD%9C"><span class="nav-text">2.1 初始化操作</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#2-2-%E6%8F%90%E4%BA%A4Job"><span class="nav-text">2.2 提交Job</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#2-3-DAGScheduler%E4%BA%8B%E4%BB%B6%E8%BD%AC%E5%8F%91"><span class="nav-text">2.3 DAGScheduler事件转发</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#2-4-Stage%E6%89%A7%E8%A1%8C%E8%B0%83%E5%BA%A6"><span class="nav-text">2.4 Stage执行调度</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#2-5-%E6%8F%90%E4%BA%A4%E6%89%A7%E8%A1%8C%E4%BB%BB%E5%8A%A1"><span class="nav-text">2.5 提交执行任务</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%BA%90"><span class="nav-text">参考资源</span></a></li></ol></div>
+      </div>
+      <!--/noindex-->
+
+      <div class="site-overview-wrap sidebar-panel">
+        <div class="site-author motion-element" itemprop="author" itemscope itemtype="http://schema.org/Person">
+  <p class="site-author-name" itemprop="name">笨小康</p>
+  <div class="site-description" itemprop="description"></div>
+</div>
+<div class="site-state-wrap motion-element">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+          <a href="/archives/">
+        
+          <span class="site-state-item-count">21</span>
+          <span class="site-state-item-name">日志</span>
+        </a>
+      </div>
+      <div class="site-state-item site-state-categories">
+            <a href="/categories/">
+          
+        <span class="site-state-item-count">4</span>
+        <span class="site-state-item-name">分类</span></a>
+      </div>
+      <div class="site-state-item site-state-tags">
+            <a href="/tags/">
+          
+        <span class="site-state-item-count">9</span>
+        <span class="site-state-item-name">标签</span></a>
+      </div>
+  </nav>
+</div>
+
+
+
+      </div>
+
+    </div>
+  </aside>
+  <div id="sidebar-dimmer"></div>
+
+
+      </div>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        
+
+        
+
+<div class="copyright">
+  
+  &copy; 
+  <span itemprop="copyrightYear">2021</span>
+  <span class="with-love">
+    <i class="fa fa-heart"></i>
+  </span>
+  <span class="author" itemprop="copyrightHolder">笨小康</span>
+</div>
+
+        
+
+
+
+
+
+
+
+
+      </div>
+    </footer>
+  </div>
+
+  
+  <script src="/lib/anime.min.js"></script>
+  <script src="/lib/velocity/velocity.min.js"></script>
+  <script src="/lib/velocity/velocity.ui.min.js"></script>
+
+<script src="/js/utils.js"></script>
+
+<script src="/js/motion.js"></script>
+
+
+<script src="/js/schemes/pisces.js"></script>
+
+
+<script src="/js/next-boot.js"></script>
+
+
+
+
+  
+
+
+
+
+  
+<script src="/js/local-search.js"></script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+  
+
+</body>
+</html>
