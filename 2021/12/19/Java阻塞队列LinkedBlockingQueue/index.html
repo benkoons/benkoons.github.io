@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=2">
+<meta name="theme-color" content="#222">
+<meta name="generator" content="Hexo 5.4.0">
+  <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon-next.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/images/favicon-32x32-next.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/favicon-16x16-next.png">
+  <link rel="mask-icon" href="/images/logo.svg" color="#222">
+
+<link rel="stylesheet" href="/css/main.css">
+
+<link rel="stylesheet" href="//fonts.googleapis.com/css?family=Lato:300,300italic,400,400italic,700,700italic&display=swap&subset=latin,latin-ext">
+<link rel="stylesheet" href="/lib/font-awesome/css/all.min.css">
+
+<script id="hexo-configurations">
+    var NexT = window.NexT || {};
+    var CONFIG = {"hostname":"yoursite.com","root":"/","scheme":"Pisces","version":"7.8.0","exturl":false,"sidebar":{"position":"left","display":"post","padding":18,"offset":12,"onmobile":false},"copycode":{"enable":true,"show_result":true,"style":"default"},"back2top":{"enable":true,"sidebar":false,"scrollpercent":false},"bookmark":{"enable":false,"color":"#222","save":"auto"},"fancybox":false,"mediumzoom":false,"lazyload":false,"pangu":false,"comments":{"style":"tabs","active":null,"storage":true,"lazyload":false,"nav":null},"algolia":{"hits":{"per_page":10},"labels":{"input_placeholder":"Search for Posts","hits_empty":"We didn't find any results for the search: ${query}","hits_stats":"${hits} results found in ${time} ms"}},"localsearch":{"enable":true,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false},"motion":{"enable":true,"async":false,"transition":{"post_block":"fadeIn","post_header":"slideDownIn","post_body":"slideDownIn","coll_header":"slideLeftIn","sidebar":"slideUpIn"}},"path":"search.xml"};
+  </script>
+
+  <meta name="description" content="导读：最近在阅读 YARN 和 Spark 源码过程中，发现内部消息的处理机制（生产者-阻塞队列-消费者）都是通过阻塞队列来实现的，为弄清阻塞队列中生产事件和消费事件的不同操作，本文单独介绍 Java 中的阻塞队列 LinkedBlockingQueue 的使用。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Java阻塞队列LinkedBlockingQueue">
+<meta property="og:url" content="http://yoursite.com/2021/12/19/Java%E9%98%BB%E5%A1%9E%E9%98%9F%E5%88%97LinkedBlockingQueue/index.html">
+<meta property="og:site_name" content="笨小康的博客">
+<meta property="og:description" content="导读：最近在阅读 YARN 和 Spark 源码过程中，发现内部消息的处理机制（生产者-阻塞队列-消费者）都是通过阻塞队列来实现的，为弄清阻塞队列中生产事件和消费事件的不同操作，本文单独介绍 Java 中的阻塞队列 LinkedBlockingQueue 的使用。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/12/19/db1bd5041f5de31c285a88c4c6ca7c05-1635924725139-70fd0f74-fab6-4498-874d-5ff54ca0f44f-41a6e1.png">
+<meta property="article:published_time" content="2021-12-19T11:52:56.000Z">
+<meta property="article:modified_time" content="2021-12-19T11:57:56.847Z">
+<meta property="article:author" content="笨小康">
+<meta property="article:tag" content="Java">
+<meta property="article:tag" content="Java基础">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/12/19/db1bd5041f5de31c285a88c4c6ca7c05-1635924725139-70fd0f74-fab6-4498-874d-5ff54ca0f44f-41a6e1.png">
+
+<link rel="canonical" href="http://yoursite.com/2021/12/19/Java%E9%98%BB%E5%A1%9E%E9%98%9F%E5%88%97LinkedBlockingQueue/">
+
+
+<script id="page-configurations">
+  // https://hexo.io/docs/variables.html
+  CONFIG.page = {
+    sidebar: "",
+    isHome : false,
+    isPost : true,
+    lang   : 'zh-CN'
+  };
+</script>
+
+  <title>Java阻塞队列LinkedBlockingQueue | 笨小康的博客</title>
+  
+
+
+
+
+
+
+  <noscript>
+  <style>
+  .use-motion .brand,
+  .use-motion .menu-item,
+  .sidebar-inner,
+  .use-motion .post-block,
+  .use-motion .pagination,
+  .use-motion .comments,
+  .use-motion .post-header,
+  .use-motion .post-body,
+  .use-motion .collection-header { opacity: initial; }
+
+  .use-motion .site-title,
+  .use-motion .site-subtitle {
+    opacity: initial;
+    top: initial;
+  }
+
+  .use-motion .logo-line-before i { left: initial; }
+  .use-motion .logo-line-after i { right: initial; }
+  </style>
+</noscript>
+
+</head>
+
+<body itemscope itemtype="http://schema.org/WebPage">
+  <div class="container use-motion">
+    <div class="headband"></div>
+
+    <header class="header" itemscope itemtype="http://schema.org/WPHeader">
+      <div class="header-inner"><div class="site-brand-container">
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="切换导航栏">
+      <span class="toggle-line toggle-line-first"></span>
+      <span class="toggle-line toggle-line-middle"></span>
+      <span class="toggle-line toggle-line-last"></span>
+    </div>
+  </div>
+
+  <div class="site-meta">
+
+    <a href="/" class="brand" rel="start">
+      <span class="logo-line-before"><i></i></span>
+      <h1 class="site-title">笨小康的博客</h1>
+      <span class="logo-line-after"><i></i></span>
+    </a>
+      <p class="site-subtitle" itemprop="description">星辰大海, 如期而至</p>
+  </div>
+
+  <div class="site-nav-right">
+    <div class="toggle popup-trigger">
+        <i class="fa fa-search fa-fw fa-lg"></i>
+    </div>
+  </div>
+</div>
+
+
+
+
+<nav class="site-nav">
+  <ul id="menu" class="main-menu menu">
+        <li class="menu-item menu-item-home">
+
+    <a href="/" rel="section"><i class="fa fa-home fa-fw"></i>首页</a>
+
+  </li>
+        <li class="menu-item menu-item-archives">
+
+    <a href="/archives/" rel="section"><i class="fa fa-archive fa-fw"></i>归档</a>
+
+  </li>
+        <li class="menu-item menu-item-categories">
+
+    <a href="/categories/" rel="section"><i class="fa fa-th fa-fw"></i>分类</a>
+
+  </li>
+        <li class="menu-item menu-item-tags">
+
+    <a href="/tags/" rel="section"><i class="fa fa-tags fa-fw"></i>标签云</a>
+
+  </li>
+        <li class="menu-item menu-item-flomo">
+
+    <a href="/categories/flomo/" rel="section"><i class="fa fa-lightbulb fa-fw"></i>随想录</a>
+
+  </li>
+        <li class="menu-item menu-item-about">
+
+    <a href="/about/" rel="section"><i class="fa fa-user fa-fw"></i>关于我</a>
+
+  </li>
+      <li class="menu-item menu-item-search">
+        <a role="button" class="popup-trigger"><i class="fa fa-search fa-fw"></i>搜文章
+        </a>
+      </li>
+  </ul>
+</nav>
+
+
+
+  <div class="search-pop-overlay">
+    <div class="popup search-popup">
+        <div class="search-header">
+  <span class="search-icon">
+    <i class="fa fa-search"></i>
+  </span>
+  <div class="search-input-container">
+    <input autocomplete="off" autocapitalize="off"
+           placeholder="搜索..." spellcheck="false"
+           type="search" class="search-input">
+  </div>
+  <span class="popup-btn-close">
+    <i class="fa fa-times-circle"></i>
+  </span>
+</div>
+<div id="search-result">
+  <div id="no-result">
+    <i class="fa fa-spinner fa-pulse fa-5x fa-fw"></i>
+  </div>
+</div>
+
+    </div>
+  </div>
+
+</div>
+    </header>
+
+    
+  <div class="back-to-top">
+    <i class="fa fa-arrow-up"></i>
+    <span>0%</span>
+  </div>
+  <div class="reading-progress-bar"></div>
+
+
+    <main class="main">
+      <div class="main-inner">
+        <div class="content-wrap">
+          
+
+          <div class="content post posts-expand">
+            
+
+    
+  
+  
+  <article itemscope itemtype="http://schema.org/Article" class="post-block" lang="zh-CN">
+    <link itemprop="mainEntityOfPage" href="http://yoursite.com/2021/12/19/Java%E9%98%BB%E5%A1%9E%E9%98%9F%E5%88%97LinkedBlockingQueue/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/images/avatar.gif">
+      <meta itemprop="name" content="笨小康">
+      <meta itemprop="description" content="">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="笨小康的博客">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          Java阻塞队列LinkedBlockingQueue
+        </h1>
+
+        <div class="post-meta">
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-calendar"></i>
+              </span>
+              <span class="post-meta-item-text">发表于</span>
+
+              <time title="创建时间：2021-12-19 19:52:56" itemprop="dateCreated datePublished" datetime="2021-12-19T19:52:56+08:00">2021-12-19</time>
+            </span>
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-folder"></i>
+              </span>
+              <span class="post-meta-item-text">分类于</span>
+                <span itemprop="about" itemscope itemtype="http://schema.org/Thing">
+                  <a href="/categories/Java/" itemprop="url" rel="index"><span itemprop="name">Java</span></a>
+                </span>
+            </span>
+
+          
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody">
+
+      
+        <blockquote>
+<p>导读：最近在阅读 YARN 和 Spark 源码过程中，发现内部消息的处理机制（生产者-阻塞队列-消费者）都是通过阻塞队列来实现的，为弄清阻塞队列中生产事件和消费事件的不同操作，本文单独介绍 Java 中的阻塞队列 LinkedBlockingQueue 的使用。</p>
+</blockquote>
+<h2 id="1-什么是阻塞队列"><a href="#1-什么是阻塞队列" class="headerlink" title="1. 什么是阻塞队列"></a>1. 什么是阻塞队列</h2><p>阻塞队列（BlockingQueue）是一个支持两个附加操作的队列。这两个附加的操作支持阻塞的插入和移除方法。</p>
+<ul>
+<li>支持阻塞的插入方法：当队列满时，队列会阻塞插入元素的线程，直到队列不满。</li>
+<li>支持阻塞的移除方法：当队列为空时，获取元素的线程会等待队列变为非空。</li>
+</ul>
+<p>阻塞队列常用于生产者和消费者的场景，生产者是向队列里添加元素的线程，消费者是从队列里取元素的线程。阻塞队列就是生产者用来存放元素、消费者用来获取元素的容器。</p>
+<p>在阻塞队列不可用时，这两个附加操作提供了4种处理方式，如下所示：</p>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/12/19/db1bd5041f5de31c285a88c4c6ca7c05-1635924725139-70fd0f74-fab6-4498-874d-5ff54ca0f44f-41a6e1.png" alt="img"></p>
+<ul>
+<li><p>抛出异常：当队列满时，如果再往队列里插入元素，会抛出 IllegalArgumentException 异常。当队列空时，从队列里获取元素会抛出 NoSuchElementException 异常。</p>
+</li>
+<li><p>返回特殊值：当往队列插入元素时，会返回元素是否插入成功，成功返回true。如果是移除方法，则是从队列里取出一个元素，如果没有则返回null。</p>
+</li>
+<li><p>一直阻塞：当阻塞队列满时，如果生产者线程往队列里 put 元素，队列会一直阻塞生产者线程，直到队列可用或者响应中断退出。当队列空时，如果消费者从队列里 take 元素，队列会阻塞住消费者线程，直到队列不为空。</p>
+</li>
+<li><p>超时退出：当阻塞队列满时，队列会阻塞生产者线程一段时间，如果超过一定的时间，生产者线程就会退出。</p>
+</li>
+</ul>
+<blockquote>
+<p>Tips：如果是无界阻塞队列，队列不可能会出现满的情况，所以使用 add/put/offer 方法永远不会被阻塞，而且使用 offer 方法时，该方法永远返回 true。</p>
+</blockquote>
+<h2 id="2-基于阻塞队列的生产消费模式"><a href="#2-基于阻塞队列的生产消费模式" class="headerlink" title="2. 基于阻塞队列的生产消费模式"></a>2. 基于阻塞队列的生产消费模式</h2><h3 id="2-1-生产者消费者逻辑"><a href="#2-1-生产者消费者逻辑" class="headerlink" title="2.1 生产者消费者逻辑"></a>2.1 生产者消费者逻辑</h3><p>LinkedBlockingQueue 实现是线程安全的阻塞队列，实现了先进先出等特性，是生产者消费者模式的首选，LinkedBlockingQueue 可以指定队列容量，如果不指定，默认最大是 Integer.MAX_VALUE。用例以指定容量的有界队列为主，构造一个容量为 5 的有界的阻塞队列 LinkedBlockingQueue，并创建独立的生产者线程和消费者线程，生产者以 1s 的间隔持续的生产数据，消费者以 2s 的间隔消费数据，保证消费者的消费速度跟不上生产者的生产速度，让阻塞队列达到容量限制。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="class"><span class="keyword">class</span> <span class="title">BlockQueue</span> </span>&#123;</span><br><span class="line"></span><br><span class="line">	BlockingQueue&lt;Integer&gt; queue = <span class="keyword">new</span> LinkedBlockingQueue&lt;&gt;(<span class="number">5</span>);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/**</span></span><br><span class="line"><span class="comment">	 * 生产者</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">produce</span><span class="params">()</span> </span>&#123;</span><br><span class="line">		<span class="keyword">new</span> Thread(<span class="keyword">new</span> Runnable() &#123;</span><br><span class="line">			<span class="keyword">int</span> i = <span class="number">0</span>;</span><br><span class="line">			<span class="meta">@Override</span></span><br><span class="line">			<span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">run</span><span class="params">()</span> </span>&#123;</span><br><span class="line">				<span class="keyword">while</span> (<span class="keyword">true</span>) &#123;</span><br><span class="line">					<span class="keyword">try</span> &#123;</span><br><span class="line">                        <span class="comment">// 向阻塞队列中添加元素</span></span><br><span class="line">						queue.put(++i);</span><br><span class="line">						Thread.sleep(<span class="number">1000</span>);</span><br><span class="line">                        <span class="comment">// 生产 15 个数据</span></span><br><span class="line">                        <span class="keyword">if</span> (i == <span class="number">15</span>) &#123;</span><br><span class="line">							<span class="keyword">break</span>;</span><br><span class="line">						&#125;</span><br><span class="line">					&#125;<span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">						e.printStackTrace();</span><br><span class="line">					&#125;</span><br><span class="line">				&#125;</span><br><span class="line">			&#125;</span><br><span class="line">		&#125;, <span class="string">&quot;produce-thread&quot;</span>).start();</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/**</span></span><br><span class="line"><span class="comment">	 * 消费者</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">consumer</span><span class="params">()</span> </span>&#123;</span><br><span class="line">		<span class="keyword">new</span> Thread(<span class="keyword">new</span> Runnable() &#123;</span><br><span class="line">			<span class="meta">@Override</span></span><br><span class="line">			<span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">run</span><span class="params">()</span> </span>&#123;</span><br><span class="line">				<span class="keyword">while</span> (<span class="keyword">true</span>) &#123;</span><br><span class="line">					<span class="keyword">try</span> &#123;</span><br><span class="line">						System.out.println(<span class="string">&quot;queue size = &quot;</span> + queue.size());</span><br><span class="line">						<span class="comment">// 从队列中取数据</span></span><br><span class="line">                        Integer ele = queue.take();</span><br><span class="line">						System.out.println(Thread.currentThread().getName() + <span class="string">&quot; = &quot;</span> + ele);</span><br><span class="line">						Thread.sleep(<span class="number">2000</span>);</span><br><span class="line">					&#125;<span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">						e.printStackTrace();</span><br><span class="line">					&#125;</span><br><span class="line">				&#125;</span><br><span class="line">			&#125;</span><br><span class="line">		&#125;, <span class="string">&quot;consumer-thread&quot;</span>).start();</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="function"><span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">void</span> <span class="title">main</span><span class="params">(String[] args)</span> </span>&#123;</span><br><span class="line">		BlockQueue obj = <span class="keyword">new</span> BlockQueue();</span><br><span class="line">		obj.produce();</span><br><span class="line">		obj.consumer();</span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="2-2-插入方法和移除方法组合用例"><a href="#2-2-插入方法和移除方法组合用例" class="headerlink" title="2.2 插入方法和移除方法组合用例"></a>2.2 插入方法和移除方法组合用例</h3><p>构造不同插入方法和移除方法的测试用例，看看阻塞队列的行为表现有什么不一样。添加元素的方法有 put/offer/add，移除元素的方法有 take/poll/remove，具体介绍如下。</p>
+<p>插入方法：</p>
+<ul>
+<li><p>put：若队列已满了则发生阻塞，等待元素加入队列。</p>
+</li>
+<li><p>offer：若发现队列已满无法添加的话，会直接返回false。</p>
+</li>
+<li><p>add：若发现队列已满直接抛出异常。</p>
+</li>
+</ul>
+<p>移除方法：</p>
+<ul>
+<li><p>take：若队列为空，发生阻塞，等待有元素以取出。</p>
+</li>
+<li><p>poll：若队列为空，返回null。</p>
+</li>
+<li><p>remove：若队列为空，抛出 NoSuchElementException 异常。</p>
+</li>
+</ul>
+<h4 id="2-2-1-put和take组合"><a href="#2-2-1-put和take组合" class="headerlink" title="2.2.1 put和take组合"></a>2.2.1 put和take组合</h4><p>运行结果如下：</p>
+<ul>
+<li>队列满时，put 方法阻塞等待队列有空闲位以添加元素；</li>
+<li>队列空时，take 方法阻塞等待队列有新元素抵达以取出元素。</li>
+</ul>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br></pre></td><td class="code"><pre><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 1</span><br><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 2</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 3</span><br><span class="line">queue size = 3</span><br><span class="line">consumer-thread = 4</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 5</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 6</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 7</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 8</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 9</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 10</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 11</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 12</span><br><span class="line">queue size = 3</span><br><span class="line">consumer-thread = 13</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 14</span><br><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 15</span><br><span class="line">queue size = 0</span><br><span class="line">（生产者停止生产，消费者阻塞等待中～～）</span><br></pre></td></tr></table></figure>
+
+<h4 id="2-2-2-offer和take组合"><a href="#2-2-2-offer和take组合" class="headerlink" title="2.2.2 offer和take组合"></a>2.2.2 offer和take组合</h4><p>为让 offer 添加操作效果更明显，将消费者线程 consumer 的线程等待时间调整为 4s (<code>Thread.sleep(4000);</code>)。</p>
+<p>运行结果如下：</p>
+<ul>
+<li>队列满时，offer 方法发现队列已满添加元素返回 false，元素丢弃，不添加到队列中；</li>
+<li>队列空时，take 方法阻塞等待队列有新元素抵达以取出元素。</li>
+</ul>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 1</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 2</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 3</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 4</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 5</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 6</span><br><span class="line">queue size = 3</span><br><span class="line">consumer-thread = 7</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 10</span><br><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 13</span><br><span class="line">queue size = 0</span><br><span class="line">（消费者会丢失部分数据）</span><br></pre></td></tr></table></figure>
+
+<h4 id="2-2-3-add和take组合"><a href="#2-2-3-add和take组合" class="headerlink" title="2.2.3 add和take组合"></a>2.2.3 add和take组合</h4><p>运行结果如下：</p>
+<ul>
+<li>队列满时，add 方法直接抛异常，生产者无法添加元素，消费者处理完队列剩余元素；</li>
+<li>队列空时，take 方法阻塞等待队列有新元素抵达以取出元素。</li>
+</ul>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 1</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 2</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 3</span><br><span class="line">queue size = 3</span><br><span class="line">consumer-thread = 4</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 5</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 6</span><br><span class="line">java.lang.IllegalStateException: Queue full</span><br></pre></td></tr></table></figure>
+
+<h4 id="2-2-4-put和poll组合"><a href="#2-2-4-put和poll组合" class="headerlink" title="2.2.4 put和poll组合"></a>2.2.4 put和poll组合</h4><p>生产者生产数据量改为 10，运行结果如下：</p>
+<ul>
+<li>队列满时，put 方法阻塞等待队列有空闲位以添加元素；</li>
+<li>队列空时，poll 方法返回 null。</li>
+</ul>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 1</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 2</span><br><span class="line">queue size = 3</span><br><span class="line">consumer-thread = 3</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 4</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 5</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 6</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 7</span><br><span class="line">queue size = 3</span><br><span class="line">consumer-thread = 8</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 9</span><br><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 10</span><br><span class="line">queue size = 0</span><br><span class="line">consumer-thread = null</span><br><span class="line">queue size = 0</span><br><span class="line">consumer-thread = null</span><br></pre></td></tr></table></figure>
+
+<h4 id="2-2-5-put和remove组合"><a href="#2-2-5-put和remove组合" class="headerlink" title="2.2.5 put和remove组合"></a>2.2.5 put和remove组合</h4><p>生产者生产数据量改为 10，运行结果如下：</p>
+<ul>
+<li>队列满时，put 方法阻塞等待队列有空闲位以添加元素；</li>
+<li>队列空时，remove 方法抛 NoSuchElementException 异常。</li>
+</ul>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 1</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 2</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 3</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 4</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 5</span><br><span class="line">queue size = 5</span><br><span class="line">consumer-thread = 6</span><br><span class="line">queue size = 4</span><br><span class="line">consumer-thread = 7</span><br><span class="line">queue size = 3</span><br><span class="line">consumer-thread = 8</span><br><span class="line">queue size = 2</span><br><span class="line">consumer-thread = 9</span><br><span class="line">queue size = 1</span><br><span class="line">consumer-thread = 10</span><br><span class="line">queue size = 0</span><br><span class="line">java.util.NoSuchElementException</span><br></pre></td></tr></table></figure>
+
+<h3 id="2-3-小结"><a href="#2-3-小结" class="headerlink" title="2.3 小结"></a>2.3 小结</h3><p>至此，通过介绍和用例场景，对 LinkedBlockingQueue 阻塞队列的添加元素 add/put/offer 和移除元素 remove/poll/take 两类操作应该比较熟悉。简单来讲，对于有界的阻塞队列，put 和 take 组合是最完美的组合，队列满时 put 阻塞等待元素添加，队列空时 take 阻塞等待元素抵达以取出，不会出现数据丢失或抛异常的情况。</p>
+<h2 id="参考资料"><a href="#参考资料" class="headerlink" title="参考资料"></a>参考资料</h2><ul>
+<li><a target="_blank" rel="noopener" href="https://juejin.cn/post/6844903640709201934">Java并发系列——阻塞队列</a></li>
+</ul>
+
+    </div>
+
+    
+    
+    
+
+    <div>
+      
+      <div>
+	 
+		<div style="text-align:center;color:#bfbfbf;font-size:16px;"> 
+			<span>-------- 本文结束 </span> <i class="fa fa-paw"></i> <span> 感谢阅读 --------</span>
+		</div> 
+	
+</div>
+      
+    </div>
+        <div class="reward-container">
+  <div></div>
+  <button onclick="var qr = document.getElementById('qr'); qr.style.display = (qr.style.display === 'none') ? 'block' : 'none';">
+    请我喝杯咖啡~
+  </button>
+  <div id="qr" style="display: none;">
+      
+      <div style="display: inline-block;">
+        <img src="/images/wechatpay.png" alt="笨小康 微信打赏">
+        <p>微信打赏</p>
+      </div>
+      
+      <div style="display: inline-block;">
+        <img src="/images/alipay.png" alt="笨小康 支付宝打赏">
+        <p>支付宝打赏</p>
+      </div>
+
+  </div>
+</div>
+
+
+      <footer class="post-footer">
+          <div class="post-tags">
+              <a href="/tags/Java/" rel="tag"><i class="fa fa-tag"></i> Java</a>
+              <a href="/tags/Java%E5%9F%BA%E7%A1%80/" rel="tag"><i class="fa fa-tag"></i> Java基础</a>
+          </div>
+
+        
+
+
+        
+    <div class="post-nav">
+      <div class="post-nav-item">
+    <a href="/2021/12/19/%E7%90%86%E8%A7%A3Java%E6%8E%92%E5%BA%8F%E5%99%A8%E7%9A%84%E5%8D%87%E5%BA%8F-%E9%99%8D%E5%BA%8F/" rel="prev" title="理解Java排序器的升序/降序">
+      <i class="fa fa-chevron-left"></i> 理解Java排序器的升序/降序
+    </a></div>
+      <div class="post-nav-item"></div>
+    </div>
+      </footer>
+    
+  </article>
+  
+  
+  
+
+
+
+
+          </div>
+          
+
+<script>
+  window.addEventListener('tabs:register', () => {
+    let { activeClass } = CONFIG.comments;
+    if (CONFIG.comments.storage) {
+      activeClass = localStorage.getItem('comments_active') || activeClass;
+    }
+    if (activeClass) {
+      let activeTab = document.querySelector(`a[href="#comment-${activeClass}"]`);
+      if (activeTab) {
+        activeTab.click();
+      }
+    }
+  });
+  if (CONFIG.comments.storage) {
+    window.addEventListener('tabs:click', event => {
+      if (!event.target.matches('.tabs-comment .tab-content .tab-pane')) return;
+      let commentClass = event.target.classList[1];
+      localStorage.setItem('comments_active', commentClass);
+    });
+  }
+</script>
+
+        </div>
+          
+  
+  <div class="toggle sidebar-toggle">
+    <span class="toggle-line toggle-line-first"></span>
+    <span class="toggle-line toggle-line-middle"></span>
+    <span class="toggle-line toggle-line-last"></span>
+  </div>
+
+  <aside class="sidebar">
+    <div class="sidebar-inner">
+
+      <ul class="sidebar-nav motion-element">
+        <li class="sidebar-nav-toc">
+          文章目录
+        </li>
+        <li class="sidebar-nav-overview">
+          站点概览
+        </li>
+      </ul>
+
+      <!--noindex-->
+      <div class="post-toc-wrap sidebar-panel">
+          <div class="post-toc motion-element"><ol class="nav"><li class="nav-item nav-level-2"><a class="nav-link" href="#1-%E4%BB%80%E4%B9%88%E6%98%AF%E9%98%BB%E5%A1%9E%E9%98%9F%E5%88%97"><span class="nav-text">1. 什么是阻塞队列</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#2-%E5%9F%BA%E4%BA%8E%E9%98%BB%E5%A1%9E%E9%98%9F%E5%88%97%E7%9A%84%E7%94%9F%E4%BA%A7%E6%B6%88%E8%B4%B9%E6%A8%A1%E5%BC%8F"><span class="nav-text">2. 基于阻塞队列的生产消费模式</span></a><ol class="nav-child"><li class="nav-item nav-level-3"><a class="nav-link" href="#2-1-%E7%94%9F%E4%BA%A7%E8%80%85%E6%B6%88%E8%B4%B9%E8%80%85%E9%80%BB%E8%BE%91"><span class="nav-text">2.1 生产者消费者逻辑</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#2-2-%E6%8F%92%E5%85%A5%E6%96%B9%E6%B3%95%E5%92%8C%E7%A7%BB%E9%99%A4%E6%96%B9%E6%B3%95%E7%BB%84%E5%90%88%E7%94%A8%E4%BE%8B"><span class="nav-text">2.2 插入方法和移除方法组合用例</span></a><ol class="nav-child"><li class="nav-item nav-level-4"><a class="nav-link" href="#2-2-1-put%E5%92%8Ctake%E7%BB%84%E5%90%88"><span class="nav-text">2.2.1 put和take组合</span></a></li><li class="nav-item nav-level-4"><a class="nav-link" href="#2-2-2-offer%E5%92%8Ctake%E7%BB%84%E5%90%88"><span class="nav-text">2.2.2 offer和take组合</span></a></li><li class="nav-item nav-level-4"><a class="nav-link" href="#2-2-3-add%E5%92%8Ctake%E7%BB%84%E5%90%88"><span class="nav-text">2.2.3 add和take组合</span></a></li><li class="nav-item nav-level-4"><a class="nav-link" href="#2-2-4-put%E5%92%8Cpoll%E7%BB%84%E5%90%88"><span class="nav-text">2.2.4 put和poll组合</span></a></li><li class="nav-item nav-level-4"><a class="nav-link" href="#2-2-5-put%E5%92%8Cremove%E7%BB%84%E5%90%88"><span class="nav-text">2.2.5 put和remove组合</span></a></li></ol></li><li class="nav-item nav-level-3"><a class="nav-link" href="#2-3-%E5%B0%8F%E7%BB%93"><span class="nav-text">2.3 小结</span></a></li></ol></li><li class="nav-item nav-level-2"><a class="nav-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="nav-text">参考资料</span></a></li></ol></div>
+      </div>
+      <!--/noindex-->
+
+      <div class="site-overview-wrap sidebar-panel">
+        <div class="site-author motion-element" itemprop="author" itemscope itemtype="http://schema.org/Person">
+  <p class="site-author-name" itemprop="name">笨小康</p>
+  <div class="site-description" itemprop="description"></div>
+</div>
+<div class="site-state-wrap motion-element">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+          <a href="/archives/">
+        
+          <span class="site-state-item-count">24</span>
+          <span class="site-state-item-name">日志</span>
+        </a>
+      </div>
+      <div class="site-state-item site-state-categories">
+            <a href="/categories/">
+          
+        <span class="site-state-item-count">5</span>
+        <span class="site-state-item-name">分类</span></a>
+      </div>
+      <div class="site-state-item site-state-tags">
+            <a href="/tags/">
+          
+        <span class="site-state-item-count">11</span>
+        <span class="site-state-item-name">标签</span></a>
+      </div>
+  </nav>
+</div>
+
+
+
+      </div>
+
+    </div>
+  </aside>
+  <div id="sidebar-dimmer"></div>
+
+
+      </div>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        
+
+        
+
+<div class="copyright">
+  
+  &copy; 
+  <span itemprop="copyrightYear">2021</span>
+  <span class="with-love">
+    <i class="fa fa-heart"></i>
+  </span>
+  <span class="author" itemprop="copyrightHolder">笨小康</span>
+</div>
+
+        
+
+
+
+
+
+
+
+
+      </div>
+    </footer>
+  </div>
+
+  
+  <script src="/lib/anime.min.js"></script>
+  <script src="/lib/velocity/velocity.min.js"></script>
+  <script src="/lib/velocity/velocity.ui.min.js"></script>
+
+<script src="/js/utils.js"></script>
+
+<script src="/js/motion.js"></script>
+
+
+<script src="/js/schemes/pisces.js"></script>
+
+
+<script src="/js/next-boot.js"></script>
+
+
+
+
+  
+
+
+
+
+  
+<script src="/js/local-search.js"></script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+  
+
+</body>
+</html>

@@ -23,15 +23,15 @@
   <meta name="description" content="源码版本：Cloudera Spark 2.1.0 导读：线上集群在使用 Spark HistoryServer 曾出现过两类问题，一类问题是用户提交 Spark 任务后 HistoryServer 服务不能正常解析日志，导致任务完成后无法在 HistoryServer 中找到作业的执行记录，严重影响到用户查看日志的体验，另一类问题是每个 Spark 作业都会向 HDFS 中写入一个 event">
 <meta property="og:type" content="article">
 <meta property="og:title" content="Spark HistoryServer日志解析异常源码分析">
-<meta property="og:url" content="http://yoursite.com/2021/12/19/Spark-HistoryServer%E6%97%A5%E5%BF%97%E8%A7%A3%E6%9E%90%E5%BC%82%E5%B8%B8%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/index.html">
+<meta property="og:url" content="http://yoursite.com/2021/12/18/Spark-HistoryServer%E6%97%A5%E5%BF%97%E8%A7%A3%E6%9E%90%E5%BC%82%E5%B8%B8%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/index.html">
 <meta property="og:site_name" content="笨小康的博客">
 <meta property="og:description" content="源码版本：Cloudera Spark 2.1.0 导读：线上集群在使用 Spark HistoryServer 曾出现过两类问题，一类问题是用户提交 Spark 任务后 HistoryServer 服务不能正常解析日志，导致任务完成后无法在 HistoryServer 中找到作业的执行记录，严重影响到用户查看日志的体验，另一类问题是每个 Spark 作业都会向 HDFS 中写入一个 event">
 <meta property="og:locale" content="zh_CN">
 <meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/12/19/d7b0cb45c1276e53109bed343a2227c8-1630396093098-d032d4d4-cda2-4ba8-81f0-bb35935a473b-5c3168.png">
 <meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/12/19/69f0faa17e283e35287939a943ee4ff3-1630396243880-f5c22b27-08d5-4799-ad30-b44aed94249b-a3675b.png">
 <meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/12/19/472e6cbccd97f63a0650398500c45f75-1630396288906-0eeee454-f92d-47ef-b7eb-c8ab665772a0-805061.png">
-<meta property="article:published_time" content="2021-12-19T11:12:33.000Z">
-<meta property="article:modified_time" content="2021-12-19T11:26:27.189Z">
+<meta property="article:published_time" content="2021-12-18T11:12:33.000Z">
+<meta property="article:modified_time" content="2021-12-19T11:50:14.009Z">
 <meta property="article:author" content="笨小康">
 <meta property="article:tag" content="Spark">
 <meta property="article:tag" content="Spark源码">
@@ -39,7 +39,7 @@
 <meta name="twitter:card" content="summary">
 <meta name="twitter:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2021/12/19/d7b0cb45c1276e53109bed343a2227c8-1630396093098-d032d4d4-cda2-4ba8-81f0-bb35935a473b-5c3168.png">
 
-<link rel="canonical" href="http://yoursite.com/2021/12/19/Spark-HistoryServer%E6%97%A5%E5%BF%97%E8%A7%A3%E6%9E%90%E5%BC%82%E5%B8%B8%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/">
+<link rel="canonical" href="http://yoursite.com/2021/12/18/Spark-HistoryServer%E6%97%A5%E5%BF%97%E8%A7%A3%E6%9E%90%E5%BC%82%E5%B8%B8%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/">
 
 
 <script id="page-configurations">
@@ -207,7 +207,7 @@
   
   
   <article itemscope itemtype="http://schema.org/Article" class="post-block" lang="zh-CN">
-    <link itemprop="mainEntityOfPage" href="http://yoursite.com/2021/12/19/Spark-HistoryServer%E6%97%A5%E5%BF%97%E8%A7%A3%E6%9E%90%E5%BC%82%E5%B8%B8%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/">
+    <link itemprop="mainEntityOfPage" href="http://yoursite.com/2021/12/18/Spark-HistoryServer%E6%97%A5%E5%BF%97%E8%A7%A3%E6%9E%90%E5%BC%82%E5%B8%B8%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/">
 
     <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
       <meta itemprop="image" content="/images/avatar.gif">
@@ -230,7 +230,7 @@
               </span>
               <span class="post-meta-item-text">发表于</span>
 
-              <time title="创建时间：2021-12-19 19:12:33" itemprop="dateCreated datePublished" datetime="2021-12-19T19:12:33+08:00">2021-12-19</time>
+              <time title="创建时间：2021-12-18 19:12:33" itemprop="dateCreated datePublished" datetime="2021-12-18T19:12:33+08:00">2021-12-18</time>
             </span>
             <span class="post-meta-item">
               <span class="post-meta-item-icon">
@@ -520,7 +520,7 @@
       <i class="fa fa-chevron-left"></i> Spark作业提交流程及源码分析
     </a></div>
       <div class="post-nav-item">
-    <a href="/2021/12/19/SparkSQL%E5%BB%BA%E8%A1%A8%E8%AF%B7%E6%B1%82sentry%E9%89%B4%E6%9D%83%E5%A4%B1%E8%B4%A5/" rel="next" title="SparkSQL建表请求sentry鉴权失败">
+    <a href="/2021/12/18/SparkSQL%E5%BB%BA%E8%A1%A8%E8%AF%B7%E6%B1%82sentry%E9%89%B4%E6%9D%83%E5%A4%B1%E8%B4%A5/" rel="next" title="SparkSQL建表请求sentry鉴权失败">
       SparkSQL建表请求sentry鉴权失败 <i class="fa fa-chevron-right"></i>
     </a></div>
     </div>
@@ -596,20 +596,20 @@
       <div class="site-state-item site-state-posts">
           <a href="/archives/">
         
-          <span class="site-state-item-count">21</span>
+          <span class="site-state-item-count">24</span>
           <span class="site-state-item-name">日志</span>
         </a>
       </div>
       <div class="site-state-item site-state-categories">
             <a href="/categories/">
           
-        <span class="site-state-item-count">4</span>
+        <span class="site-state-item-count">5</span>
         <span class="site-state-item-name">分类</span></a>
       </div>
       <div class="site-state-item site-state-tags">
             <a href="/tags/">
           
-        <span class="site-state-item-count">9</span>
+        <span class="site-state-item-count">11</span>
         <span class="site-state-item-name">标签</span></a>
       </div>
   </nav>
