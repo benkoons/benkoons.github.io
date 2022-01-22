@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=2">
+<meta name="theme-color" content="#222">
+<meta name="generator" content="Hexo 5.4.0">
+  <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon-next.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/images/favicon-32x32-next.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/favicon-16x16-next.png">
+  <link rel="mask-icon" href="/images/logo.svg" color="#222">
+
+<link rel="stylesheet" href="/css/main.css">
+
+<link rel="stylesheet" href="//fonts.googleapis.com/css?family=Lato:300,300italic,400,400italic,700,700italic&display=swap&subset=latin,latin-ext">
+<link rel="stylesheet" href="/lib/font-awesome/css/all.min.css">
+
+<script id="hexo-configurations">
+    var NexT = window.NexT || {};
+    var CONFIG = {"hostname":"yoursite.com","root":"/","scheme":"Pisces","version":"7.8.0","exturl":false,"sidebar":{"position":"left","display":"post","padding":18,"offset":12,"onmobile":false},"copycode":{"enable":true,"show_result":true,"style":"default"},"back2top":{"enable":true,"sidebar":false,"scrollpercent":false},"bookmark":{"enable":false,"color":"#222","save":"auto"},"fancybox":false,"mediumzoom":false,"lazyload":false,"pangu":false,"comments":{"style":"tabs","active":null,"storage":true,"lazyload":false,"nav":null},"algolia":{"hits":{"per_page":10},"labels":{"input_placeholder":"Search for Posts","hits_empty":"We didn't find any results for the search: ${query}","hits_stats":"${hits} results found in ${time} ms"}},"localsearch":{"enable":true,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false},"motion":{"enable":true,"async":false,"transition":{"post_block":"fadeIn","post_header":"slideDownIn","post_body":"slideDownIn","coll_header":"slideLeftIn","sidebar":"slideUpIn"}},"path":"search.xml"};
+  </script>
+
+  <meta name="description" content="源码版本：Apache Spark 2.4.7 导读：Spark 2.4.7 执行非分区表 insert overwrite 操作时目录的所属 owner 和 目录 acl 权限信息被修改（分区表操作不会出行该问题），导致 A 用户创建的表路径，实际拥有该路径读写权限的 B 用户无法正常读写，主要原因是非分区表执行 insert overwrite 操作时会删除表路径然后重建，而重建的 umas">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Spark insert overwrite权限被修改问题分析">
+<meta property="og:url" content="http://yoursite.com/2022/01/22/Spark-insert-overwrite%E6%9D%83%E9%99%90%E8%A2%AB%E4%BF%AE%E6%94%B9%E9%97%AE%E9%A2%98%E5%88%86%E6%9E%90/index.html">
+<meta property="og:site_name" content="笨小康的博客">
+<meta property="og:description" content="源码版本：Apache Spark 2.4.7 导读：Spark 2.4.7 执行非分区表 insert overwrite 操作时目录的所属 owner 和 目录 acl 权限信息被修改（分区表操作不会出行该问题），导致 A 用户创建的表路径，实际拥有该路径读写权限的 B 用户无法正常读写，主要原因是非分区表执行 insert overwrite 操作时会删除表路径然后重建，而重建的 umas">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/01/22/91d408d4702da251438df06b47374221-1642563770948-88bb6886-2d8d-488e-b673-d49cd0a635f0-20220122220527718-38abe5.png">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/01/22/91d408d4702da251438df06b47374221-1642563770948-88bb6886-2d8d-488e-b673-d49cd0a635f0-877511.png">
+<meta property="og:image" content="https://cdn.nlark.com/yuque/0/2022/png/21681456/1642563777551-c0cd5116-d9ac-4301-80ae-d83f8c57588f.png">
+<meta property="article:published_time" content="2022-01-22T14:03:58.000Z">
+<meta property="article:modified_time" content="2022-01-22T14:11:41.350Z">
+<meta property="article:author" content="笨小康">
+<meta property="article:tag" content="Spark">
+<meta property="article:tag" content="bugfix">
+<meta property="article:tag" content="SparkSQL">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/01/22/91d408d4702da251438df06b47374221-1642563770948-88bb6886-2d8d-488e-b673-d49cd0a635f0-20220122220527718-38abe5.png">
+
+<link rel="canonical" href="http://yoursite.com/2022/01/22/Spark-insert-overwrite%E6%9D%83%E9%99%90%E8%A2%AB%E4%BF%AE%E6%94%B9%E9%97%AE%E9%A2%98%E5%88%86%E6%9E%90/">
+
+
+<script id="page-configurations">
+  // https://hexo.io/docs/variables.html
+  CONFIG.page = {
+    sidebar: "",
+    isHome : false,
+    isPost : true,
+    lang   : 'zh-CN'
+  };
+</script>
+
+  <title>Spark insert overwrite权限被修改问题分析 | 笨小康的博客</title>
+  
+
+
+
+
+
+
+  <noscript>
+  <style>
+  .use-motion .brand,
+  .use-motion .menu-item,
+  .sidebar-inner,
+  .use-motion .post-block,
+  .use-motion .pagination,
+  .use-motion .comments,
+  .use-motion .post-header,
+  .use-motion .post-body,
+  .use-motion .collection-header { opacity: initial; }
+
+  .use-motion .site-title,
+  .use-motion .site-subtitle {
+    opacity: initial;
+    top: initial;
+  }
+
+  .use-motion .logo-line-before i { left: initial; }
+  .use-motion .logo-line-after i { right: initial; }
+  </style>
+</noscript>
+
+</head>
+
+<body itemscope itemtype="http://schema.org/WebPage">
+  <div class="container use-motion">
+    <div class="headband"></div>
+
+    <header class="header" itemscope itemtype="http://schema.org/WPHeader">
+      <div class="header-inner"><div class="site-brand-container">
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="切换导航栏">
+      <span class="toggle-line toggle-line-first"></span>
+      <span class="toggle-line toggle-line-middle"></span>
+      <span class="toggle-line toggle-line-last"></span>
+    </div>
+  </div>
+
+  <div class="site-meta">
+
+    <a href="/" class="brand" rel="start">
+      <span class="logo-line-before"><i></i></span>
+      <h1 class="site-title">笨小康的博客</h1>
+      <span class="logo-line-after"><i></i></span>
+    </a>
+      <p class="site-subtitle" itemprop="description">星辰大海, 如期而至</p>
+  </div>
+
+  <div class="site-nav-right">
+    <div class="toggle popup-trigger">
+        <i class="fa fa-search fa-fw fa-lg"></i>
+    </div>
+  </div>
+</div>
+
+
+
+
+<nav class="site-nav">
+  <ul id="menu" class="main-menu menu">
+        <li class="menu-item menu-item-home">
+
+    <a href="/" rel="section"><i class="fa fa-home fa-fw"></i>首页</a>
+
+  </li>
+        <li class="menu-item menu-item-archives">
+
+    <a href="/archives/" rel="section"><i class="fa fa-archive fa-fw"></i>归档</a>
+
+  </li>
+        <li class="menu-item menu-item-categories">
+
+    <a href="/categories/" rel="section"><i class="fa fa-th fa-fw"></i>分类</a>
+
+  </li>
+        <li class="menu-item menu-item-tags">
+
+    <a href="/tags/" rel="section"><i class="fa fa-tags fa-fw"></i>标签云</a>
+
+  </li>
+        <li class="menu-item menu-item-flomo">
+
+    <a href="/categories/flomo/" rel="section"><i class="fa fa-lightbulb fa-fw"></i>随想录</a>
+
+  </li>
+        <li class="menu-item menu-item-about">
+
+    <a href="/about/" rel="section"><i class="fa fa-user fa-fw"></i>关于我</a>
+
+  </li>
+      <li class="menu-item menu-item-search">
+        <a role="button" class="popup-trigger"><i class="fa fa-search fa-fw"></i>搜文章
+        </a>
+      </li>
+  </ul>
+</nav>
+
+
+
+  <div class="search-pop-overlay">
+    <div class="popup search-popup">
+        <div class="search-header">
+  <span class="search-icon">
+    <i class="fa fa-search"></i>
+  </span>
+  <div class="search-input-container">
+    <input autocomplete="off" autocapitalize="off"
+           placeholder="搜索..." spellcheck="false"
+           type="search" class="search-input">
+  </div>
+  <span class="popup-btn-close">
+    <i class="fa fa-times-circle"></i>
+  </span>
+</div>
+<div id="search-result">
+  <div id="no-result">
+    <i class="fa fa-spinner fa-pulse fa-5x fa-fw"></i>
+  </div>
+</div>
+
+    </div>
+  </div>
+
+</div>
+    </header>
+
+    
+  <div class="back-to-top">
+    <i class="fa fa-arrow-up"></i>
+    <span>0%</span>
+  </div>
+  <div class="reading-progress-bar"></div>
+
+
+    <main class="main">
+      <div class="main-inner">
+        <div class="content-wrap">
+          
+
+          <div class="content post posts-expand">
+            
+
+    
+  
+  
+  <article itemscope itemtype="http://schema.org/Article" class="post-block" lang="zh-CN">
+    <link itemprop="mainEntityOfPage" href="http://yoursite.com/2022/01/22/Spark-insert-overwrite%E6%9D%83%E9%99%90%E8%A2%AB%E4%BF%AE%E6%94%B9%E9%97%AE%E9%A2%98%E5%88%86%E6%9E%90/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/images/avatar.gif">
+      <meta itemprop="name" content="笨小康">
+      <meta itemprop="description" content="">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="笨小康的博客">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          Spark insert overwrite权限被修改问题分析
+        </h1>
+
+        <div class="post-meta">
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-calendar"></i>
+              </span>
+              <span class="post-meta-item-text">发表于</span>
+
+              <time title="创建时间：2022-01-22 22:03:58" itemprop="dateCreated datePublished" datetime="2022-01-22T22:03:58+08:00">2022-01-22</time>
+            </span>
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-folder"></i>
+              </span>
+              <span class="post-meta-item-text">分类于</span>
+                <span itemprop="about" itemscope itemtype="http://schema.org/Thing">
+                  <a href="/categories/Spark/" itemprop="url" rel="index"><span itemprop="name">Spark</span></a>
+                </span>
+            </span>
+
+          
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody">
+
+      
+        <blockquote>
+<p>源码版本：Apache Spark 2.4.7</p>
+<p>导读：Spark 2.4.7 执行非分区表 insert overwrite 操作时目录的所属 owner 和 目录 acl 权限信息被修改（分区表操作不会出行该问题），导致 A 用户创建的表路径，实际拥有该路径读写权限的 B 用户无法正常读写，主要原因是非分区表执行 insert overwrite 操作时会删除表路径然后重建，而重建的 umask-mode 信息被覆盖导致创建的路径 mask 异常，B 用户实际有权限也无法读写。</p>
+</blockquote>
+<h1 id="1-问题复现"><a href="#1-问题复现" class="headerlink" title="1. 问题复现"></a>1. 问题复现</h1><p>操作 sql 建表后，正常的表路径 owner 和 acl 信息，其实 r-x 组属于读权限 acl 组，rwx 属于读写权限 acl 组。</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#</span><span class="bash"> 建非分区表</span></span><br><span class="line">create table test.tmp_table_nopar_kw(id int) stored as orc;</span><br><span class="line"><span class="meta"></span></span><br><span class="line"><span class="meta">#</span><span class="bash"> 表acl信息</span></span><br><span class="line">[hdfs@hostname1:/var/lib/hadoop-hdfs]</span><br><span class="line"><span class="meta">$</span><span class="bash">  hdfs dfs -getfacl hdfs://nameservice/hive/warehouse/<span class="built_in">test</span>//tmp_table_nopar_kw</span></span><br><span class="line"><span class="meta">#</span><span class="bash"> file: hdfs://nameservice/hive/warehouse/<span class="built_in">test</span>//tmp_table_nopar_kw</span></span><br><span class="line"><span class="meta">#</span><span class="bash"> owner: wangkang</span></span><br><span class="line"><span class="meta">#</span><span class="bash"> group: supergroup</span></span><br><span class="line">user::rwx</span><br><span class="line">group::rwx</span><br><span class="line">group:0a51e5bffea9bf698089a6060728c489:rwx</span><br><span class="line">group:bb856a73c4e759332ac2b4159766ff67:r-x</span><br><span class="line">group:hadoopadmin:rwx</span><br><span class="line">mask::rwx</span><br><span class="line">other::--x</span><br><span class="line">default:user::rwx</span><br><span class="line">default:group::rwx</span><br><span class="line">default:group:0a51e5bffea9bf698089a6060728c489:rwx</span><br><span class="line">default:group:bb856a73c4e759332ac2b4159766ff67:r-x</span><br><span class="line">default:group:hadoopadmin:rwx</span><br><span class="line">default:mask::rwx</span><br><span class="line">default:other::--x</span><br></pre></td></tr></table></figure>
+
+<p>当使用另外一个有目录读写权限的用户 kwang 执行 insert overwrite 操作时，表路径的 owner 和 acl 信息都被修改。effective:r-x 表示实际 rwx 读写权限组的有效权限只有 r-x，这样就导致原来的表所属用户 wangkang 没有该路径的写权限。</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#</span><span class="bash"> kwang用户执行操作</span></span><br><span class="line">insert overwrite table test.tmp_table_nopar_kw values(2);</span><br><span class="line"></span><br><span class="line">[hdfs@hostname1:/var/lib/hadoop-hdfs]</span><br><span class="line"><span class="meta">$</span><span class="bash"> hdfs dfs -getfacl hdfs://nameservice/hive/warehouse/<span class="built_in">test</span>/tmp_table_nopar_kw</span></span><br><span class="line"><span class="meta">#</span><span class="bash"> file: hdfs://nameservice/hive/warehouse/<span class="built_in">test</span>/tmp_table_nopar_kw</span></span><br><span class="line"><span class="meta">#</span><span class="bash"> owner: kwang</span></span><br><span class="line"><span class="meta">#</span><span class="bash"> group: supergroup</span></span><br><span class="line">user::rwx</span><br><span class="line">group::rwx      #effective:r-x</span><br><span class="line">group:0a51e5bffea9bf698089a6060728c489:rwx      #effective:r-x</span><br><span class="line">group:bb856a73c4e759332ac2b4159766ff67:r-x</span><br><span class="line">group:hadoopadmin:rwx   #effective:r-x</span><br><span class="line">mask::r-x</span><br><span class="line">other::--x</span><br><span class="line">default:user::rwx</span><br><span class="line">default:group::rwx</span><br><span class="line">default:group:0a51e5bffea9bf698089a6060728c489:rwx</span><br><span class="line">default:group:bb856a73c4e759332ac2b4159766ff67:r-x</span><br><span class="line">default:group:hadoopadmin:rwx</span><br><span class="line">default:mask::rwx</span><br><span class="line">default:other::--x</span><br></pre></td></tr></table></figure>
+
+<h1 id="2-原因分析"><a href="#2-原因分析" class="headerlink" title="2. 原因分析"></a>2. 原因分析</h1><p>根据问题中的表现，该表路径的 owner 和 acl 信息被修改，问题出在表路径创建时的逻辑。查看 namenode 的 hdfs-audit.log 日志，发现 insert overwrite 操作时会先删除掉表路径，然后重新创建。</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">2022-01-19 09:54:27,618 INFO FSNamesystem.audit: allowed=true   ugi=hdfs (auth:SIMPLE)  ip=/10.110.3.14 cmd=delete      src=/hive/warehouse/bdsp_test.db/tmp_table_nopar_kw     dst=null        perm=null       proto=rpc</span><br><span class="line">2022-01-19 09:54:27,769 INFO FSNamesystem.audit: allowed=true   ugi=hdfs (auth:SIMPLE)  ip=/10.110.3.14 cmd=mkdirs      src=/hive/warehouse/bdsp_test.db/tmp_table_nopar_kw/_temporary/0        dst=null        perm=hdfs:hive:rwxrwx--x   proto=rpc</span><br></pre></td></tr></table></figure>
+
+<p>接下来的关键就是看该表路径是在哪里删除以及如何创建的。通过 explain 查看对应 sql Physical Plan，可以确定 sql 最后执行的是 InsertIntoHadoopFsRelationCommand。</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line">spark-sql (default)&gt;  explain insert overwrite table tmp_table_nopar_kw values(2);</span><br><span class="line">== Physical Plan ==</span><br><span class="line">Execute InsertIntoHadoopFsRelationCommand InsertIntoHadoopFsRelationCommand hdfs://nameservice/hive/warehouse/bdsp_test.db/tmp_table_nopar_kw, false, ORC, Map(serialization.format -&gt; 1), Overwrite, CatalogTable(</span><br><span class="line">Database: bdsp_test</span><br><span class="line">Table: tmp_table_nopar_kw</span><br><span class="line">Owner: hdfs</span><br><span class="line">Created Time: Tue Jan 18 15:11:36 CST 2022</span><br><span class="line">Last Access: Thu Jan 01 08:00:00 CST 1970</span><br><span class="line">Created By: Spark 2.4.7</span><br><span class="line">Type: MANAGED</span><br><span class="line">Provider: hive</span><br><span class="line">Table Properties: [transient_lastDdlTime=1642489896]</span><br><span class="line">Location: hdfs://nameservice/hive/warehouse/bdsp_test.db/tmp_table_nopar_kw</span><br><span class="line">Serde Library: org.apache.hadoop.hive.ql.io.orc.OrcSerde</span><br><span class="line">InputFormat: org.apache.hadoop.hive.ql.io.orc.OrcInputFormat</span><br><span class="line">OutputFormat: org.apache.hadoop.hive.ql.io.orc.OrcOutputFormat</span><br><span class="line">Storage Properties: [serialization.format=1]</span><br><span class="line">Partition Provider: Catalog</span><br><span class="line">Schema: root</span><br><span class="line">-- id: integer (nullable = true)</span><br><span class="line">), org.apache.spark.sql.execution.datasources.InMemoryFileIndex@d6b27b97, [id]</span><br><span class="line">+- LocalTableScan [id#22]</span><br><span class="line">Time taken: 0.042 seconds, Fetched 1 row(s)</span><br></pre></td></tr></table></figure>
+
+<p>InsertIntoHadoopFsRelationCommand 逻辑中有两个关键点，关键点1是删除非分区表对应的 HDFS 路径，关键点2在 overwrite 写数据时重新创建表目录，然后写数据。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/spark/sql/execution/datasources/InsertIntoHadoopFsRelationCommand.scala</span></span><br><span class="line"><span class="keyword">case</span> <span class="class"><span class="keyword">class</span> <span class="title">InsertIntoHadoopFsRelationCommand</span>(<span class="params"></span></span></span><br><span class="line"><span class="params"><span class="class">    outputPath: <span class="type">Path</span>,</span></span></span><br><span class="line"><span class="params"><span class="class">    staticPartitions: <span class="type">TablePartitionSpec</span>,</span></span></span><br><span class="line"><span class="params"><span class="class">    ifPartitionNotExists: <span class="type">Boolean</span>,</span></span></span><br><span class="line"><span class="params"><span class="class">    partitionColumns: <span class="type">Seq</span>[<span class="type">Attribute</span>],</span></span></span><br><span class="line"><span class="params"><span class="class">    bucketSpec: <span class="type">Option</span>[<span class="type">BucketSpec</span>],</span></span></span><br><span class="line"><span class="params"><span class="class">    fileFormat: <span class="type">FileFormat</span>,</span></span></span><br><span class="line"><span class="params"><span class="class">    options: <span class="type">Map</span>[<span class="type">String</span>, <span class="type">String</span>],</span></span></span><br><span class="line"><span class="params"><span class="class">    query: <span class="type">LogicalPlan</span>,</span></span></span><br><span class="line"><span class="params"><span class="class">    mode: <span class="type">SaveMode</span>,</span></span></span><br><span class="line"><span class="params"><span class="class">    catalogTable: <span class="type">Option</span>[<span class="type">CatalogTable</span>],</span></span></span><br><span class="line"><span class="params"><span class="class">    fileIndex: <span class="type">Option</span>[<span class="type">FileIndex</span>],</span></span></span><br><span class="line"><span class="params"><span class="class">    outputColumnNames: <span class="type">Seq</span>[<span class="type">String</span>]</span>)</span></span><br><span class="line">  <span class="keyword">extends</span> <span class="type">DataWritingCommand</span> &#123;</span><br><span class="line">  <span class="keyword">import</span> org.apache.spark.sql.catalyst.catalog.<span class="type">ExternalCatalogUtils</span>.escapePathName</span><br><span class="line"> </span><br><span class="line">  <span class="keyword">override</span> <span class="function"><span class="keyword">def</span> <span class="title">run</span></span>(sparkSession: <span class="type">SparkSession</span>, child: <span class="type">SparkPlan</span>): <span class="type">Seq</span>[<span class="type">Row</span>] = &#123;</span><br><span class="line">      ...</span><br><span class="line">      <span class="keyword">val</span> doInsertion = (mode, pathExists) <span class="keyword">match</span> &#123;</span><br><span class="line">      <span class="keyword">case</span> (<span class="type">SaveMode</span>.<span class="type">ErrorIfExists</span>, <span class="literal">true</span>) =&gt;</span><br><span class="line">        <span class="keyword">throw</span> <span class="keyword">new</span> <span class="type">AnalysisException</span>(<span class="string">s&quot;path <span class="subst">$qualifiedOutputPath</span> already exists.&quot;</span>)</span><br><span class="line">      <span class="keyword">case</span> (<span class="type">SaveMode</span>.<span class="type">Overwrite</span>, <span class="literal">true</span>) =&gt;</span><br><span class="line">        <span class="keyword">if</span> (ifPartitionNotExists &amp;&amp; matchingPartitions.nonEmpty) &#123;</span><br><span class="line">          <span class="literal">false</span></span><br><span class="line">        &#125; <span class="keyword">else</span> <span class="keyword">if</span> (dynamicPartitionOverwrite) &#123;</span><br><span class="line">          <span class="comment">// For dynamic partition overwrite, do not delete partition directories ahead.</span></span><br><span class="line">          <span class="literal">true</span></span><br><span class="line">        &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">          <span class="comment">// 关键点1：这里会删除非分区表的HDFS目录</span></span><br><span class="line">          deleteMatchingPartitions(fs, qualifiedOutputPath, customPartitionLocations, committer)</span><br><span class="line">          <span class="literal">true</span></span><br><span class="line">        &#125;</span><br><span class="line">      <span class="keyword">case</span> (<span class="type">SaveMode</span>.<span class="type">Append</span>, _) | (<span class="type">SaveMode</span>.<span class="type">Overwrite</span>, _) | (<span class="type">SaveMode</span>.<span class="type">ErrorIfExists</span>, <span class="literal">false</span>) =&gt;</span><br><span class="line">        <span class="literal">true</span></span><br><span class="line">      <span class="keyword">case</span> (<span class="type">SaveMode</span>.<span class="type">Ignore</span>, exists) =&gt;</span><br><span class="line">        !exists</span><br><span class="line">      <span class="keyword">case</span> (s, exists) =&gt;</span><br><span class="line">        <span class="keyword">throw</span> <span class="keyword">new</span> <span class="type">IllegalStateException</span>(<span class="string">s&quot;unsupported save mode <span class="subst">$s</span> (<span class="subst">$exists</span>)&quot;</span>)</span><br><span class="line">    &#125;</span><br><span class="line">     	...</span><br><span class="line">      <span class="keyword">val</span> updatedPartitionPaths =</span><br><span class="line">        <span class="comment">// 关键点2：内部会新建写数据的临时目录，并commit数据到目录</span></span><br><span class="line">        <span class="type">FileFormatWriter</span>.write(</span><br><span class="line">          sparkSession = sparkSession,</span><br><span class="line">          plan = child,</span><br><span class="line">          fileFormat = fileFormat,</span><br><span class="line">          committer = committer,</span><br><span class="line">          outputSpec = <span class="type">FileFormatWriter</span>.<span class="type">OutputSpec</span>(</span><br><span class="line">            committerOutputPath.toString, customPartitionLocations, outputColumns),</span><br><span class="line">          hadoopConf = hadoopConf,</span><br><span class="line">          partitionColumns = partitionColumns,</span><br><span class="line">          bucketSpec = bucketSpec,</span><br><span class="line">          statsTrackers = <span class="type">Seq</span>(basicWriteJobStatsTracker(hadoopConf)),</span><br><span class="line">          options = options)</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>关键点1的删除表路径如下。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/spark/sql/execution/datasources/InsertIntoHadoopFsRelationCommand.scala</span></span><br><span class="line">  <span class="keyword">private</span> <span class="function"><span class="keyword">def</span> <span class="title">deleteMatchingPartitions</span></span>(</span><br><span class="line">      fs: <span class="type">FileSystem</span>,</span><br><span class="line">      qualifiedOutputPath: <span class="type">Path</span>,</span><br><span class="line">      customPartitionLocations: <span class="type">Map</span>[<span class="type">TablePartitionSpec</span>, <span class="type">String</span>],</span><br><span class="line">      committer: <span class="type">FileCommitProtocol</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">    ...</span><br><span class="line">    <span class="comment">// first clear the path determined by the static partition keys (e.g. /table/foo=1)</span></span><br><span class="line">    <span class="keyword">val</span> staticPrefixPath = qualifiedOutputPath.suffix(staticPartitionPrefix)</span><br><span class="line">    <span class="comment">// 删除表路径</span></span><br><span class="line">    <span class="keyword">if</span> (fs.exists(staticPrefixPath) &amp;&amp; !committer.deleteWithJob(fs, staticPrefixPath, <span class="literal">true</span>)) &#123;</span><br><span class="line">      <span class="keyword">throw</span> <span class="keyword">new</span> <span class="type">IOException</span>(<span class="string">s&quot;Unable to clear output &quot;</span> +</span><br><span class="line">        <span class="string">s&quot;directory <span class="subst">$staticPrefixPath</span> prior to writing to it&quot;</span>)</span><br><span class="line">    &#125;</span><br><span class="line">    ...</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line"></span><br><span class="line"><span class="comment">// 位置：org/apache/spark/internal/io/FileCommitProtocol.scala</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">deleteWithJob</span></span>(fs: <span class="type">FileSystem</span>, path: <span class="type">Path</span>, recursive: <span class="type">Boolean</span>): <span class="type">Boolean</span> = &#123;</span><br><span class="line">    fs.delete(path, recursive)</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>关键点2新建表路径的逻辑。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/spark/sql/execution/datasources/FileFormatWriter.scala</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">write</span></span>(</span><br><span class="line">      sparkSession: <span class="type">SparkSession</span>,</span><br><span class="line">      plan: <span class="type">SparkPlan</span>,</span><br><span class="line">      fileFormat: <span class="type">FileFormat</span>,</span><br><span class="line">      committer: <span class="type">FileCommitProtocol</span>,</span><br><span class="line">      outputSpec: <span class="type">OutputSpec</span>,</span><br><span class="line">      hadoopConf: <span class="type">Configuration</span>,</span><br><span class="line">      partitionColumns: <span class="type">Seq</span>[<span class="type">Attribute</span>],</span><br><span class="line">      bucketSpec: <span class="type">Option</span>[<span class="type">BucketSpec</span>],</span><br><span class="line">      statsTrackers: <span class="type">Seq</span>[<span class="type">WriteJobStatsTracker</span>],</span><br><span class="line">      options: <span class="type">Map</span>[<span class="type">String</span>, <span class="type">String</span>])</span><br><span class="line">    : <span class="type">Set</span>[<span class="type">String</span>] = &#123;</span><br><span class="line">      <span class="comment">// This call shouldn&#x27;t be put into the `try` block below because it only initializes and</span></span><br><span class="line">      <span class="comment">// prepares the job, any exception thrown from here shouldn&#x27;t cause abortJob() to be called.</span></span><br><span class="line">      <span class="comment">// 为 committer准备job环境信息</span></span><br><span class="line">      committer.setupJob(job)</span><br><span class="line">    &#125;</span><br></pre></td></tr></table></figure>
+
+<p>初始化 JobContext 和 commiter 信息。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/spark/internal/io/HadoopMapReduceCommitProtocol.scala</span></span><br><span class="line">  <span class="keyword">override</span> <span class="function"><span class="keyword">def</span> <span class="title">setupJob</span></span>(jobContext: <span class="type">JobContext</span>): <span class="type">Unit</span> = &#123;</span><br><span class="line">    <span class="comment">// Setup IDs</span></span><br><span class="line">    <span class="keyword">val</span> jobId = <span class="type">SparkHadoopWriterUtils</span>.createJobID(<span class="keyword">new</span> <span class="type">Date</span>, <span class="number">0</span>)</span><br><span class="line">    <span class="keyword">val</span> taskId = <span class="keyword">new</span> <span class="type">TaskID</span>(jobId, <span class="type">TaskType</span>.<span class="type">MAP</span>, <span class="number">0</span>)</span><br><span class="line">    <span class="keyword">val</span> taskAttemptId = <span class="keyword">new</span> <span class="type">TaskAttemptID</span>(taskId, <span class="number">0</span>)</span><br><span class="line"> </span><br><span class="line">    <span class="comment">// Set up the configuration object</span></span><br><span class="line">    jobContext.getConfiguration.set(<span class="string">&quot;mapreduce.job.id&quot;</span>, jobId.toString)</span><br><span class="line">    jobContext.getConfiguration.set(<span class="string">&quot;mapreduce.task.id&quot;</span>, taskAttemptId.getTaskID.toString)</span><br><span class="line">    jobContext.getConfiguration.set(<span class="string">&quot;mapreduce.task.attempt.id&quot;</span>, taskAttemptId.toString)</span><br><span class="line">    jobContext.getConfiguration.setBoolean(<span class="string">&quot;mapreduce.task.ismap&quot;</span>, <span class="literal">true</span>)</span><br><span class="line">    jobContext.getConfiguration.setInt(<span class="string">&quot;mapreduce.task.partition&quot;</span>, <span class="number">0</span>)</span><br><span class="line"> </span><br><span class="line">    <span class="keyword">val</span> taskAttemptContext = <span class="keyword">new</span> <span class="type">TaskAttemptContextImpl</span>(jobContext.getConfiguration, taskAttemptId)</span><br><span class="line">    committer = setupCommitter(taskAttemptContext)</span><br><span class="line">    <span class="comment">// 这里会去新建写数据目录</span></span><br><span class="line">    committer.setupJob(jobContext)</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>这里是真正创建目录的地方。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//位置：org/apache/hadoop/mapreduce/lib/output/FileOutputCommitter.class</span></span><br><span class="line">  <span class="comment">/**</span></span><br><span class="line"><span class="comment">   * Create the temporary directory that is the root of all of the task</span></span><br><span class="line"><span class="comment">   * work directories.</span></span><br><span class="line"><span class="comment">   * @param context the job&#x27;s context</span></span><br><span class="line"><span class="comment">   */</span></span><br><span class="line">  public void setupJob(<span class="type">JobContext</span> context) <span class="keyword">throws</span> <span class="type">IOException</span> &#123;</span><br><span class="line">    <span class="keyword">if</span> (hasOutputPath()) &#123;</span><br><span class="line">      <span class="type">Path</span> jobAttemptPath = getJobAttemptPath(context);</span><br><span class="line">      <span class="comment">// 关键：问题出在这里</span></span><br><span class="line">      <span class="type">FileSystem</span> fs = jobAttemptPath.getFileSystem(</span><br><span class="line">          context.getConfiguration());</span><br><span class="line">      <span class="keyword">if</span> (!fs.mkdirs(jobAttemptPath)) &#123;</span><br><span class="line">        <span class="type">LOG</span>.error(<span class="string">&quot;Mkdirs failed to create &quot;</span> + jobAttemptPath);</span><br><span class="line">      &#125;</span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">      <span class="type">LOG</span>.warn(<span class="string">&quot;Output Path is null in setupJob()&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>分析<code>FileSystem fs = jobAttemptPath.getFileSystem( context.getConfiguration());</code>这段代码，通过 debug 发现 context.getConfiguration() 的 conf 信息中 <code>fs.permissions.umask-mode</code> 是 006，也就是提交节点中 hdfs-site.xml 文件的配置值，但构建的 fs 对象的 <code>fs.permissions.umask-mode</code> 是 022，也就是出问题的路径权限，该值来源于 hadoop-common jar 中 core-default.xml 文件的默认值。也就说明这里构建的 fs 对象会覆盖 <code>fs.permissions.umask-mode</code> 值。</p>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/01/22/91d408d4702da251438df06b47374221-1642563770948-88bb6886-2d8d-488e-b673-d49cd0a635f0-20220122220527718-38abe5.png" alt="img"></p>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/01/22/91d408d4702da251438df06b47374221-1642563770948-88bb6886-2d8d-488e-b673-d49cd0a635f0-877511.png" alt="img"></p>
+<p><img src="https://cdn.nlark.com/yuque/0/2022/png/21681456/1642563777551-c0cd5116-d9ac-4301-80ae-d83f8c57588f.png" alt="img"></p>
+<h1 id="3-问题解决"><a href="#3-问题解决" class="headerlink" title="3. 问题解决"></a>3. 问题解决</h1><p>两个思路， 一个是在删除非分区表目录的时候只删除目录内部数据，保留表目录，另一个是更新 hadoop-common jar 包，去掉jar包 core-default.xml 文件或者把 umask-mode 值改成 006 重新编译更新jar包。</p>
+<p>方式一：删除目录数据保留目录</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/spark/internal/io/FileCommitProtocol.scala</span></span><br><span class="line">  <span class="comment">// 默认delete操作，递归删除根目录数据及根目录</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">deleteWithJob</span></span>(fs: <span class="type">FileSystem</span>, path: <span class="type">Path</span>, recursive: <span class="type">Boolean</span>): <span class="type">Boolean</span> = &#123;</span><br><span class="line">    fs.delete(path, recursive)</span><br><span class="line">  &#125;</span><br><span class="line">  </span><br><span class="line">  <span class="comment">// 修改后的delete操作，递归删除根目录数据，但保留根目录，此时目录 acl 信息不会改变</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">deleteContainRootPath</span></span>(fs: <span class="type">FileSystem</span>, path: <span class="type">Path</span>, recursive: <span class="type">Boolean</span>): <span class="type">Boolean</span> = &#123;</span><br><span class="line">    <span class="type">FileUtil</span>.stat2Paths(fs.listStatus(path)).foreach( ele =&gt; fs.delete(ele, recursive))</span><br><span class="line">    fs.listStatus(path).isEmpty</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>方式二：替换覆盖配置的jar包</p>
+<p>把 hadoop-common jar 包中 core-default.xml 中的<code>fs.permissions.umask-mode</code>值改为006重新打包。</p>
+
+    </div>
+
+    
+    
+    
+
+    <div>
+      
+      <div>
+	 
+		<div style="text-align:center;color:#bfbfbf;font-size:16px;"> 
+			<span>-------- 本文结束 </span> <i class="fa fa-paw"></i> <span> 感谢阅读 --------</span>
+		</div> 
+	
+</div>
+      
+    </div>
+        <div class="reward-container">
+  <div></div>
+  <button onclick="var qr = document.getElementById('qr'); qr.style.display = (qr.style.display === 'none') ? 'block' : 'none';">
+    请我喝杯咖啡~
+  </button>
+  <div id="qr" style="display: none;">
+      
+      <div style="display: inline-block;">
+        <img src="/images/wechatpay.png" alt="笨小康 微信打赏">
+        <p>微信打赏</p>
+      </div>
+      
+      <div style="display: inline-block;">
+        <img src="/images/alipay.png" alt="笨小康 支付宝打赏">
+        <p>支付宝打赏</p>
+      </div>
+
+  </div>
+</div>
+
+
+      <footer class="post-footer">
+          <div class="post-tags">
+              <a href="/tags/Spark/" rel="tag"><i class="fa fa-tag"></i> Spark</a>
+              <a href="/tags/bugfix/" rel="tag"><i class="fa fa-tag"></i> bugfix</a>
+              <a href="/tags/SparkSQL/" rel="tag"><i class="fa fa-tag"></i> SparkSQL</a>
+          </div>
+
+        
+
+
+        
+    <div class="post-nav">
+      <div class="post-nav-item">
+    <a href="/2021/12/19/Java%E9%98%BB%E5%A1%9E%E9%98%9F%E5%88%97LinkedBlockingQueue/" rel="prev" title="Java阻塞队列LinkedBlockingQueue">
+      <i class="fa fa-chevron-left"></i> Java阻塞队列LinkedBlockingQueue
+    </a></div>
+      <div class="post-nav-item">
+    <a href="/2022/01/22/Spark-commit%E7%BB%93%E6%9E%9C%E6%95%B0%E6%8D%AE%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/" rel="next" title="Spark commit结果数据源码分析">
+      Spark commit结果数据源码分析 <i class="fa fa-chevron-right"></i>
+    </a></div>
+    </div>
+      </footer>
+    
+  </article>
+  
+  
+  
+
+
+
+
+          </div>
+          
+
+<script>
+  window.addEventListener('tabs:register', () => {
+    let { activeClass } = CONFIG.comments;
+    if (CONFIG.comments.storage) {
+      activeClass = localStorage.getItem('comments_active') || activeClass;
+    }
+    if (activeClass) {
+      let activeTab = document.querySelector(`a[href="#comment-${activeClass}"]`);
+      if (activeTab) {
+        activeTab.click();
+      }
+    }
+  });
+  if (CONFIG.comments.storage) {
+    window.addEventListener('tabs:click', event => {
+      if (!event.target.matches('.tabs-comment .tab-content .tab-pane')) return;
+      let commentClass = event.target.classList[1];
+      localStorage.setItem('comments_active', commentClass);
+    });
+  }
+</script>
+
+        </div>
+          
+  
+  <div class="toggle sidebar-toggle">
+    <span class="toggle-line toggle-line-first"></span>
+    <span class="toggle-line toggle-line-middle"></span>
+    <span class="toggle-line toggle-line-last"></span>
+  </div>
+
+  <aside class="sidebar">
+    <div class="sidebar-inner">
+
+      <ul class="sidebar-nav motion-element">
+        <li class="sidebar-nav-toc">
+          文章目录
+        </li>
+        <li class="sidebar-nav-overview">
+          站点概览
+        </li>
+      </ul>
+
+      <!--noindex-->
+      <div class="post-toc-wrap sidebar-panel">
+          <div class="post-toc motion-element"><ol class="nav"><li class="nav-item nav-level-1"><a class="nav-link" href="#1-%E9%97%AE%E9%A2%98%E5%A4%8D%E7%8E%B0"><span class="nav-text">1. 问题复现</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#2-%E5%8E%9F%E5%9B%A0%E5%88%86%E6%9E%90"><span class="nav-text">2. 原因分析</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#3-%E9%97%AE%E9%A2%98%E8%A7%A3%E5%86%B3"><span class="nav-text">3. 问题解决</span></a></li></ol></div>
+      </div>
+      <!--/noindex-->
+
+      <div class="site-overview-wrap sidebar-panel">
+        <div class="site-author motion-element" itemprop="author" itemscope itemtype="http://schema.org/Person">
+  <p class="site-author-name" itemprop="name">笨小康</p>
+  <div class="site-description" itemprop="description"></div>
+</div>
+<div class="site-state-wrap motion-element">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+          <a href="/archives/">
+        
+          <span class="site-state-item-count">26</span>
+          <span class="site-state-item-name">日志</span>
+        </a>
+      </div>
+      <div class="site-state-item site-state-categories">
+            <a href="/categories/">
+          
+        <span class="site-state-item-count">5</span>
+        <span class="site-state-item-name">分类</span></a>
+      </div>
+      <div class="site-state-item site-state-tags">
+            <a href="/tags/">
+          
+        <span class="site-state-item-count">12</span>
+        <span class="site-state-item-name">标签</span></a>
+      </div>
+  </nav>
+</div>
+
+
+
+      </div>
+
+    </div>
+  </aside>
+  <div id="sidebar-dimmer"></div>
+
+
+      </div>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        
+
+        
+
+<div class="copyright">
+  
+  &copy; 
+  <span itemprop="copyrightYear">2022</span>
+  <span class="with-love">
+    <i class="fa fa-heart"></i>
+  </span>
+  <span class="author" itemprop="copyrightHolder">笨小康</span>
+</div>
+
+        
+
+
+
+
+
+
+
+
+      </div>
+    </footer>
+  </div>
+
+  
+  <script src="/lib/anime.min.js"></script>
+  <script src="/lib/velocity/velocity.min.js"></script>
+  <script src="/lib/velocity/velocity.ui.min.js"></script>
+
+<script src="/js/utils.js"></script>
+
+<script src="/js/motion.js"></script>
+
+
+<script src="/js/schemes/pisces.js"></script>
+
+
+<script src="/js/next-boot.js"></script>
+
+
+
+
+  
+
+
+
+
+  
+<script src="/js/local-search.js"></script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+  
+
+</body>
+</html>
