@@ -29,9 +29,9 @@
 <meta property="og:locale" content="zh_CN">
 <meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/01/22/91d408d4702da251438df06b47374221-1642563770948-88bb6886-2d8d-488e-b673-d49cd0a635f0-20220122220527718-38abe5.png">
 <meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/01/22/91d408d4702da251438df06b47374221-1642563770948-88bb6886-2d8d-488e-b673-d49cd0a635f0-877511.png">
-<meta property="og:image" content="https://cdn.nlark.com/yuque/0/2022/png/21681456/1642563777551-c0cd5116-d9ac-4301-80ae-d83f8c57588f.png">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/05/08/374d19f3cb7ea8bf56f721ed26c56b61-1642563777551-c0cd5116-d9ac-4301-80ae-d83f8c57588f-eafe07.png">
 <meta property="article:published_time" content="2022-01-22T14:03:58.000Z">
-<meta property="article:modified_time" content="2022-01-22T14:11:41.350Z">
+<meta property="article:modified_time" content="2022-05-08T15:53:11.260Z">
 <meta property="article:author" content="笨小康">
 <meta property="article:tag" content="Spark">
 <meta property="article:tag" content="bugfix">
@@ -287,7 +287,7 @@
 <p>分析<code>FileSystem fs = jobAttemptPath.getFileSystem( context.getConfiguration());</code>这段代码，通过 debug 发现 context.getConfiguration() 的 conf 信息中 <code>fs.permissions.umask-mode</code> 是 006，也就是提交节点中 hdfs-site.xml 文件的配置值，但构建的 fs 对象的 <code>fs.permissions.umask-mode</code> 是 022，也就是出问题的路径权限，该值来源于 hadoop-common jar 中 core-default.xml 文件的默认值。也就说明这里构建的 fs 对象会覆盖 <code>fs.permissions.umask-mode</code> 值。</p>
 <p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/01/22/91d408d4702da251438df06b47374221-1642563770948-88bb6886-2d8d-488e-b673-d49cd0a635f0-20220122220527718-38abe5.png" alt="img"></p>
 <p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/01/22/91d408d4702da251438df06b47374221-1642563770948-88bb6886-2d8d-488e-b673-d49cd0a635f0-877511.png" alt="img"></p>
-<p><img src="https://cdn.nlark.com/yuque/0/2022/png/21681456/1642563777551-c0cd5116-d9ac-4301-80ae-d83f8c57588f.png" alt="img"></p>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/05/08/374d19f3cb7ea8bf56f721ed26c56b61-1642563777551-c0cd5116-d9ac-4301-80ae-d83f8c57588f-eafe07.png" alt="img"></p>
 <h1 id="3-问题解决"><a href="#3-问题解决" class="headerlink" title="3. 问题解决"></a>3. 问题解决</h1><p>两个思路， 一个是在删除非分区表目录的时候只删除目录内部数据，保留表目录，另一个是更新 hadoop-common jar 包，去掉jar包 core-default.xml 文件或者把 umask-mode 值改成 006 重新编译更新jar包。</p>
 <p>方式一：删除目录数据保留目录</p>
 <figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/spark/internal/io/FileCommitProtocol.scala</span></span><br><span class="line">  <span class="comment">// 默认delete操作，递归删除根目录数据及根目录</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">deleteWithJob</span></span>(fs: <span class="type">FileSystem</span>, path: <span class="type">Path</span>, recursive: <span class="type">Boolean</span>): <span class="type">Boolean</span> = &#123;</span><br><span class="line">    fs.delete(path, recursive)</span><br><span class="line">  &#125;</span><br><span class="line">  </span><br><span class="line">  <span class="comment">// 修改后的delete操作，递归删除根目录数据，但保留根目录，此时目录 acl 信息不会改变</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">deleteContainRootPath</span></span>(fs: <span class="type">FileSystem</span>, path: <span class="type">Path</span>, recursive: <span class="type">Boolean</span>): <span class="type">Boolean</span> = &#123;</span><br><span class="line">    <span class="type">FileUtil</span>.stat2Paths(fs.listStatus(path)).foreach( ele =&gt; fs.delete(ele, recursive))</span><br><span class="line">    fs.listStatus(path).isEmpty</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
@@ -426,7 +426,7 @@
       <div class="site-state-item site-state-posts">
           <a href="/archives/">
         
-          <span class="site-state-item-count">26</span>
+          <span class="site-state-item-count">27</span>
           <span class="site-state-item-name">日志</span>
         </a>
       </div>
