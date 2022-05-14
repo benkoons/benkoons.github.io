@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=2">
+<meta name="theme-color" content="#222">
+<meta name="generator" content="Hexo 5.4.0">
+  <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon-next.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/images/favicon-32x32-next.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/favicon-16x16-next.png">
+  <link rel="mask-icon" href="/images/logo.svg" color="#222">
+
+<link rel="stylesheet" href="/css/main.css">
+
+<link rel="stylesheet" href="//fonts.googleapis.com/css?family=Lato:300,300italic,400,400italic,700,700italic&display=swap&subset=latin,latin-ext">
+<link rel="stylesheet" href="/lib/font-awesome/css/all.min.css">
+
+<script id="hexo-configurations">
+    var NexT = window.NexT || {};
+    var CONFIG = {"hostname":"yoursite.com","root":"/","scheme":"Pisces","version":"7.8.0","exturl":false,"sidebar":{"position":"left","display":"post","padding":18,"offset":12,"onmobile":false},"copycode":{"enable":true,"show_result":true,"style":"default"},"back2top":{"enable":true,"sidebar":false,"scrollpercent":false},"bookmark":{"enable":false,"color":"#222","save":"auto"},"fancybox":false,"mediumzoom":false,"lazyload":false,"pangu":false,"comments":{"style":"tabs","active":null,"storage":true,"lazyload":false,"nav":null},"algolia":{"hits":{"per_page":10},"labels":{"input_placeholder":"Search for Posts","hits_empty":"We didn't find any results for the search: ${query}","hits_stats":"${hits} results found in ${time} ms"}},"localsearch":{"enable":true,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false},"motion":{"enable":true,"async":false,"transition":{"post_block":"fadeIn","post_header":"slideDownIn","post_body":"slideDownIn","coll_header":"slideLeftIn","sidebar":"slideUpIn"}},"path":"search.xml"};
+  </script>
+
+  <meta name="description" content="源码：Apache Spark3.2.0 导读：Spark SQL 是 Spark 组件中非常核心的模块，在社区也比较活跃，为了解一条 sql 语句串在 Spark 中是如何执行的，本文主要介绍 Spark 是如何利用 Catalyst 对 sql 语句进行解析，在解析过程中解析器、分析器、优化器和SparkPlan 是如何工作的，sql 串、LogicalPlan、PhysicalPlan 和">
+<meta property="og:type" content="article">
+<meta property="og:title" content="SparkSQL执行计划解析原理">
+<meta property="og:url" content="http://yoursite.com/2022/05/14/SparkSQL%E6%89%A7%E8%A1%8C%E8%AE%A1%E5%88%92%E8%A7%A3%E6%9E%90%E5%8E%9F%E7%90%86/index.html">
+<meta property="og:site_name" content="笨小康的博客">
+<meta property="og:description" content="源码：Apache Spark3.2.0 导读：Spark SQL 是 Spark 组件中非常核心的模块，在社区也比较活跃，为了解一条 sql 语句串在 Spark 中是如何执行的，本文主要介绍 Spark 是如何利用 Catalyst 对 sql 语句进行解析，在解析过程中解析器、分析器、优化器和SparkPlan 是如何工作的，sql 串、LogicalPlan、PhysicalPlan 和">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/05/14/d69ffb29137a677d977ab95f4d76602a-image-20220514222603670-0b4e6d.png">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/05/14/1f72608215afbfa8dcb54c55a0caa8ba-1652439205572-78e811e7-f1b6-4bb8-9940-e45881256a7b-9f0012.png">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/05/14/7a2b74e9cf9987503c6a849d420b3d80-1652439254182-b7942212-d174-4d5d-931a-cb8f634fe8b1-b988db.png">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/05/14/e9885db74baa117d2a24e14c5ecce521-1652536630800-37d4f104-2270-43bf-8a1b-2298ebae1b7d-946743.png">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/05/14/2e04e93281e0da64f716375cee65cb27-1652536572613-32fb9511-6180-49ad-9140-03a7344869d5-0671d4.png">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/05/14/c16ec586b047555b23e0633527e5ef43-1652439275836-fc640ee9-5d02-4925-a181-701328ae1fab-cc83bc.png">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/05/14/66f47feec84185917a71e3bace6ba9bd-1652536837205-dfd52875-1ed8-4af6-8176-429d2b50a5ae-c4b6a0.png">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/05/14/5227f5ad08005528d7d0c278120bf3a1-1652536864919-079b4d11-4ce2-4cad-bb08-dd6410efaeb5-20220514222748456-4a14c1.png">
+<meta property="og:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/05/14/0ee351bfe5ac7b751e902677f56714d0-1652537095240-9ed27ef2-c39e-477a-9e11-8dc7d045907c-8ff54a.png">
+<meta property="article:published_time" content="2022-05-14T14:23:01.000Z">
+<meta property="article:modified_time" content="2022-05-14T14:30:38.498Z">
+<meta property="article:author" content="笨小康">
+<meta property="article:tag" content="Spark源码">
+<meta property="article:tag" content="SparkSQL">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/05/14/d69ffb29137a677d977ab95f4d76602a-image-20220514222603670-0b4e6d.png">
+
+<link rel="canonical" href="http://yoursite.com/2022/05/14/SparkSQL%E6%89%A7%E8%A1%8C%E8%AE%A1%E5%88%92%E8%A7%A3%E6%9E%90%E5%8E%9F%E7%90%86/">
+
+
+<script id="page-configurations">
+  // https://hexo.io/docs/variables.html
+  CONFIG.page = {
+    sidebar: "",
+    isHome : false,
+    isPost : true,
+    lang   : 'zh-CN'
+  };
+</script>
+
+  <title>SparkSQL执行计划解析原理 | 笨小康的博客</title>
+  
+
+
+
+
+
+
+  <noscript>
+  <style>
+  .use-motion .brand,
+  .use-motion .menu-item,
+  .sidebar-inner,
+  .use-motion .post-block,
+  .use-motion .pagination,
+  .use-motion .comments,
+  .use-motion .post-header,
+  .use-motion .post-body,
+  .use-motion .collection-header { opacity: initial; }
+
+  .use-motion .site-title,
+  .use-motion .site-subtitle {
+    opacity: initial;
+    top: initial;
+  }
+
+  .use-motion .logo-line-before i { left: initial; }
+  .use-motion .logo-line-after i { right: initial; }
+  </style>
+</noscript>
+
+</head>
+
+<body itemscope itemtype="http://schema.org/WebPage">
+  <div class="container use-motion">
+    <div class="headband"></div>
+
+    <header class="header" itemscope itemtype="http://schema.org/WPHeader">
+      <div class="header-inner"><div class="site-brand-container">
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="切换导航栏">
+      <span class="toggle-line toggle-line-first"></span>
+      <span class="toggle-line toggle-line-middle"></span>
+      <span class="toggle-line toggle-line-last"></span>
+    </div>
+  </div>
+
+  <div class="site-meta">
+
+    <a href="/" class="brand" rel="start">
+      <span class="logo-line-before"><i></i></span>
+      <h1 class="site-title">笨小康的博客</h1>
+      <span class="logo-line-after"><i></i></span>
+    </a>
+      <p class="site-subtitle" itemprop="description">星辰大海, 如期而至</p>
+  </div>
+
+  <div class="site-nav-right">
+    <div class="toggle popup-trigger">
+        <i class="fa fa-search fa-fw fa-lg"></i>
+    </div>
+  </div>
+</div>
+
+
+
+
+<nav class="site-nav">
+  <ul id="menu" class="main-menu menu">
+        <li class="menu-item menu-item-home">
+
+    <a href="/" rel="section"><i class="fa fa-home fa-fw"></i>首页</a>
+
+  </li>
+        <li class="menu-item menu-item-archives">
+
+    <a href="/archives/" rel="section"><i class="fa fa-archive fa-fw"></i>归档</a>
+
+  </li>
+        <li class="menu-item menu-item-categories">
+
+    <a href="/categories/" rel="section"><i class="fa fa-th fa-fw"></i>分类</a>
+
+  </li>
+        <li class="menu-item menu-item-tags">
+
+    <a href="/tags/" rel="section"><i class="fa fa-tags fa-fw"></i>标签云</a>
+
+  </li>
+        <li class="menu-item menu-item-flomo">
+
+    <a href="/categories/flomo/" rel="section"><i class="fa fa-lightbulb fa-fw"></i>随想录</a>
+
+  </li>
+        <li class="menu-item menu-item-about">
+
+    <a href="/about/" rel="section"><i class="fa fa-user fa-fw"></i>关于我</a>
+
+  </li>
+      <li class="menu-item menu-item-search">
+        <a role="button" class="popup-trigger"><i class="fa fa-search fa-fw"></i>搜文章
+        </a>
+      </li>
+  </ul>
+</nav>
+
+
+
+  <div class="search-pop-overlay">
+    <div class="popup search-popup">
+        <div class="search-header">
+  <span class="search-icon">
+    <i class="fa fa-search"></i>
+  </span>
+  <div class="search-input-container">
+    <input autocomplete="off" autocapitalize="off"
+           placeholder="搜索..." spellcheck="false"
+           type="search" class="search-input">
+  </div>
+  <span class="popup-btn-close">
+    <i class="fa fa-times-circle"></i>
+  </span>
+</div>
+<div id="search-result">
+  <div id="no-result">
+    <i class="fa fa-spinner fa-pulse fa-5x fa-fw"></i>
+  </div>
+</div>
+
+    </div>
+  </div>
+
+</div>
+    </header>
+
+    
+  <div class="back-to-top">
+    <i class="fa fa-arrow-up"></i>
+    <span>0%</span>
+  </div>
+  <div class="reading-progress-bar"></div>
+
+
+    <main class="main">
+      <div class="main-inner">
+        <div class="content-wrap">
+          
+
+          <div class="content post posts-expand">
+            
+
+    
+  
+  
+  <article itemscope itemtype="http://schema.org/Article" class="post-block" lang="zh-CN">
+    <link itemprop="mainEntityOfPage" href="http://yoursite.com/2022/05/14/SparkSQL%E6%89%A7%E8%A1%8C%E8%AE%A1%E5%88%92%E8%A7%A3%E6%9E%90%E5%8E%9F%E7%90%86/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/images/avatar.gif">
+      <meta itemprop="name" content="笨小康">
+      <meta itemprop="description" content="">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="笨小康的博客">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          SparkSQL执行计划解析原理
+        </h1>
+
+        <div class="post-meta">
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-calendar"></i>
+              </span>
+              <span class="post-meta-item-text">发表于</span>
+
+              <time title="创建时间：2022-05-14 22:23:01" itemprop="dateCreated datePublished" datetime="2022-05-14T22:23:01+08:00">2022-05-14</time>
+            </span>
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-folder"></i>
+              </span>
+              <span class="post-meta-item-text">分类于</span>
+                <span itemprop="about" itemscope itemtype="http://schema.org/Thing">
+                  <a href="/categories/Spark/" itemprop="url" rel="index"><span itemprop="name">Spark</span></a>
+                </span>
+            </span>
+
+          
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody">
+
+      
+        <blockquote>
+<p>源码：Apache Spark3.2.0</p>
+<p>导读：Spark SQL 是 Spark 组件中非常核心的模块，在社区也比较活跃，为了解一条 sql 语句串在 Spark 中是如何执行的，本文主要介绍 Spark 是如何利用 Catalyst 对 sql 语句进行解析，在解析过程中解析器、分析器、优化器和SparkPlan 是如何工作的，sql 串、LogicalPlan、PhysicalPlan 和 RDD 之间是如何转化的，进而让 Spark 顺利地执行 sql 语句。</p>
+</blockquote>
+<h1 id="1-整体介绍"><a href="#1-整体介绍" class="headerlink" title="1. 整体介绍"></a>1. 整体介绍</h1><p>Catalyst 是 Spark 官方为 Spark sql 设计的 query 优化框架， 基于函数式编程语言Scala实现，Catalyst有一个优化规则库，可以针对 Spark sql语句进行自动分析优化。Spark sql 主要用于进行结构化数据的处理，其底层执行还是调用 RDD 来执行。下图展示了一条sql语句从String到RddChain的过程。</p>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/05/14/d69ffb29137a677d977ab95f4d76602a-image-20220514222603670-0b4e6d.png" alt="image-20220514222603670"></p>
+<p>Spark sql 语句到转换成 RDD 主要流程分为以下阶段：</p>
+<ol>
+<li><p>sql 语句经过 Antlr4 解析，生成 Unresolved Logical Plan；</p>
+</li>
+<li><p>analyzer 与 catalog 绑定（catalog 存储元数据信息），生成 Resolved  Logical Plan；</p>
+</li>
+<li><p>optimizer 对 Logical Plan 优化，生成 Optimized Logical Plan；</p>
+</li>
+<li><p>SparkPlan 将 Optimized Logical Plan 转换成 Physical Plan；</p>
+</li>
+<li><p>prepareForExecution() 方法将 Physical Plan 转换成 Executed Physical Plan；</p>
+</li>
+<li><p>execute() 执行 Executed Physical Plan，得到 RDD。</p>
+</li>
+</ol>
+<p>而 Catalyst 参与其中的四个阶段，分别是：</p>
+<ul>
+<li><p>将 Unresolved Logical Plan 转化为 Resolved Logical Plan；</p>
+</li>
+<li><p>Logical Plan 到 Optimized Logical Plan；</p>
+</li>
+<li><p>Optimized Logical Plan 到 Physical Plan；</p>
+</li>
+<li><p>Code Generation (在转换为可执行物理计划阶段)。</p>
+</li>
+</ul>
+<p>Spark sql 语句在解析过程会发生两种类型的转换，一种是从 Logical Plan 到 Logical Plan 的转换，另一个是 Logical Plan 到 Physical Plan 的转换，在生成 Physical Plan 阶段，可能会使用 CBO 优化（cost based optimization，基于成本的优化），其他阶段都是 RBO 优化（rule based optimization，基于规则的优化）。</p>
+<p>本文后续内容都使用如下的 sql 语句展开详细解析。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">val</span> query = spark.sql(</span><br><span class="line">      <span class="string">&quot;&quot;&quot;</span></span><br><span class="line"><span class="string">        |SELECT SUM(v)</span></span><br><span class="line"><span class="string">        |FROM (</span></span><br><span class="line"><span class="string">        |	SELECT score.id</span></span><br><span class="line"><span class="string">        |		,100 + 80 + score.math_score + score.english_score AS v</span></span><br><span class="line"><span class="string">        |	FROM kwang.people</span></span><br><span class="line"><span class="string">        |	JOIN kwang.score</span></span><br><span class="line"><span class="string">        |	WHERE people.id = score.id</span></span><br><span class="line"><span class="string">        |		AND people.age &gt; 10</span></span><br><span class="line"><span class="string">        |	) tmp</span></span><br><span class="line"><span class="string">        |&quot;&quot;&quot;</span>.stripMargin)</span><br><span class="line"> <span class="comment">// 打印sql的执行工作流</span></span><br><span class="line"> println(query.queryExecution)</span><br></pre></td></tr></table></figure>
+
+<h1 id="2-Parser"><a href="#2-Parser" class="headerlink" title="2. Parser"></a>2. Parser</h1><p>Parser 阶段主要利用 Antlr4 语法解析器对 sql 语句进行解析。判断一条 sql 语句是否符合要求，并且进行各部分的划分，比如哪些是操作，哪些是得到的结果等等。如下是前面用例的 sql 语句经过 Parser 解析后得到的 Unresolved Logical Plan。</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">== Parsed Logical Plan ==</span><br><span class="line">&#x27;Project [unresolvedalias(&#x27;SUM(&#x27;v), None)]</span><br><span class="line">+- &#x27;SubqueryAlias tmp</span><br><span class="line">   +- &#x27;Project [&#x27;score.id, (((100 + 80) + &#x27;score.math_score) + &#x27;score.english_score) AS v#0]</span><br><span class="line">      +- &#x27;Filter ((&#x27;people.id = &#x27;score.id) AND (&#x27;people.age &gt; 10))</span><br><span class="line">         +- &#x27;Join Inner</span><br><span class="line">            :- &#x27;UnresolvedRelation [kwang, people], [], false</span><br><span class="line">            +- &#x27;UnresolvedRelation [kwang, score], [], false</span><br></pre></td></tr></table></figure>
+
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/05/14/1f72608215afbfa8dcb54c55a0caa8ba-1652439205572-78e811e7-f1b6-4bb8-9940-e45881256a7b-9f0012.png" alt="img"></p>
+<p>再来看一下 sql 的调用逻辑。</p>
+<p>parsePlan 方法的解析是通过 SessionState 对象的 sqlParser 属性调用的，SessionState 对象很关键，它是 SparkSession 能完成核心功能的重要组件，包括解析器、分析器、优化器、Planner和执行工作流，SessionState 对象对用户是透明的，在 SparkSession 初始化时底层提前封装好。SessionState 是个 lazy 变量，该变量在对象创建时并不会被初始化，而是在第一次调用是才进行初始化（即延迟加载）。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/spark/sql/SparkSession.scala</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">sql</span></span>(sqlText: <span class="type">String</span>): <span class="type">DataFrame</span> = withActive &#123;</span><br><span class="line">    <span class="keyword">val</span> tracker = <span class="keyword">new</span> <span class="type">QueryPlanningTracker</span></span><br><span class="line">    <span class="comment">// Parser解析</span></span><br><span class="line">    <span class="keyword">val</span> plan = tracker.measurePhase(<span class="type">QueryPlanningTracker</span>.<span class="type">PARSING</span>) &#123;</span><br><span class="line">      sessionState.sqlParser.parsePlan(sqlText)</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="type">Dataset</span>.ofRows(self, plan, tracker)</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 位置：org/apache/spark/sql/internal/SessionState.scala</span></span><br><span class="line"><span class="keyword">private</span>[sql] <span class="class"><span class="keyword">class</span> <span class="title">SessionState</span>(<span class="params"></span></span></span><br><span class="line"><span class="params"><span class="class">    sharedState: <span class="type">SharedState</span>,</span></span></span><br><span class="line"><span class="params"><span class="class">    val conf: <span class="type">SQLConf</span>,		// <span class="type">SQL</span>相关配置</span></span></span><br><span class="line"><span class="params"><span class="class">    val experimentalMethods: <span class="type">ExperimentalMethods</span>,	// 实验性质的<span class="type">API</span></span></span></span><br><span class="line"><span class="params"><span class="class">    val functionRegistry: <span class="type">FunctionRegistry</span>,	// 用于管理用户自定义的函数</span></span></span><br><span class="line"><span class="params"><span class="class">    val tableFunctionRegistry: <span class="type">TableFunctionRegistry</span>,	// 用户管理用户表级别的函数</span></span></span><br><span class="line"><span class="params"><span class="class">    val udfRegistration: <span class="type">UDFRegistration</span>,	// 用于给用户提供接口自定义函数</span></span></span><br><span class="line"><span class="params"><span class="class">    catalogBuilder: (</span>) <span class="title">=&gt;</span> <span class="title">SessionCatalog</span>,	<span class="comment">// 字典表，管理库、表、分区、视图等</span></span></span><br><span class="line">    <span class="keyword">val</span> sqlParser: <span class="type">ParserInterface</span>,	<span class="comment">// 解析器Parser接口</span></span><br><span class="line">    analyzerBuilder: () =&gt; <span class="type">Analyzer</span>,	<span class="comment">// 分析器Analyzer接口</span></span><br><span class="line">    optimizerBuilder: () =&gt; <span class="type">Optimizer</span>,	<span class="comment">// 优化器Optimizer接口</span></span><br><span class="line">    <span class="keyword">val</span> planner: <span class="type">SparkPlanner</span>,	<span class="comment">// 物理执行Planner接口</span></span><br><span class="line">    <span class="keyword">val</span> streamingQueryManagerBuilder: () =&gt; <span class="type">StreamingQueryManager</span>,</span><br><span class="line">    <span class="keyword">val</span> listenerManager: <span class="type">ExecutionListenerManager</span>,</span><br><span class="line">    resourceLoaderBuilder: () =&gt; <span class="type">SessionResourceLoader</span>,</span><br><span class="line">    createQueryExecution: (<span class="type">LogicalPlan</span>, <span class="type">CommandExecutionMode</span>.<span class="type">Value</span>) =&gt; <span class="type">QueryExecution</span>,	<span class="comment">// 执行查询工作流</span></span><br><span class="line">    createClone: (<span class="type">SparkSession</span>, <span class="type">SessionState</span>) =&gt; <span class="type">SessionState</span>,</span><br><span class="line">    <span class="keyword">val</span> columnarRules: <span class="type">Seq</span>[<span class="type">ColumnarRule</span>],</span><br><span class="line">    <span class="keyword">val</span> queryStagePrepRules: <span class="type">Seq</span>[<span class="type">Rule</span>[<span class="type">SparkPlan</span>]]) &#123;&#125;</span><br></pre></td></tr></table></figure>
+
+<p>解析器 sqlParser 创建好后，就会调用真正的解析逻辑 parsePlan，这里使用了 Scala 语法的柯里化特性，实际调用的 parse 函数。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/spark/sql/catalyst/parser/ParseDriver.scala</span></span><br><span class="line">  <span class="comment">/** Creates LogicalPlan for a given SQL string. */</span></span><br><span class="line">  <span class="keyword">override</span> <span class="function"><span class="keyword">def</span> <span class="title">parsePlan</span></span>(sqlText: <span class="type">String</span>): <span class="type">LogicalPlan</span> = parse(sqlText) &#123; parser =&gt;</span><br><span class="line">    <span class="comment">// Antlr4提供的</span></span><br><span class="line">    astBuilder.visitSingleStatement(parser.singleStatement()) <span class="keyword">match</span> &#123;</span><br><span class="line">      <span class="keyword">case</span> plan: <span class="type">LogicalPlan</span> =&gt; plan</span><br><span class="line">      <span class="keyword">case</span> _ =&gt;</span><br><span class="line">        <span class="keyword">val</span> position = <span class="type">Origin</span>(<span class="type">None</span>, <span class="type">None</span>)</span><br><span class="line">        <span class="keyword">throw</span> <span class="type">QueryParsingErrors</span>.sqlStatementUnsupportedError(sqlText, position)</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>parse 函数是 Antlr4 语法分析器对 sql 语句进行解析，lexer 是其词法分析器，然后 Spark 使用自身的 SqlBaseParser 对 sql 语句进行语法分析，得到 sql 语句的 Unresolved Logical Plan。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/spark/sql/catalyst/parser/ParseDriver.scala</span></span><br><span class="line">  <span class="keyword">protected</span> <span class="function"><span class="keyword">def</span> <span class="title">parse</span></span>[<span class="type">T</span>](command: <span class="type">String</span>)(toResult: <span class="type">SqlBaseParser</span> =&gt; <span class="type">T</span>): <span class="type">T</span> = &#123;</span><br><span class="line">    logDebug(<span class="string">s&quot;Parsing command: <span class="subst">$command</span>&quot;</span>)</span><br><span class="line"></span><br><span class="line">    <span class="keyword">val</span> lexer = <span class="keyword">new</span> <span class="type">SqlBaseLexer</span>(<span class="keyword">new</span> <span class="type">UpperCaseCharStream</span>(<span class="type">CharStreams</span>.fromString(command)))</span><br><span class="line">    lexer.removeErrorListeners()</span><br><span class="line">    lexer.addErrorListener(<span class="type">ParseErrorListener</span>)</span><br><span class="line"></span><br><span class="line">    <span class="keyword">val</span> tokenStream = <span class="keyword">new</span> <span class="type">CommonTokenStream</span>(lexer)</span><br><span class="line">    <span class="keyword">val</span> parser = <span class="keyword">new</span> <span class="type">SqlBaseParser</span>(tokenStream)</span><br><span class="line">    parser.addParseListener(<span class="type">PostProcessor</span>)</span><br><span class="line">    parser.removeErrorListeners()</span><br><span class="line">    parser.addErrorListener(<span class="type">ParseErrorListener</span>)</span><br><span class="line">    parser.legacy_setops_precedence_enabled = conf.setOpsPrecedenceEnforced</span><br><span class="line">    parser.legacy_exponent_literal_as_decimal_enabled = conf.exponentLiteralAsDecimalEnabled</span><br><span class="line">    parser.<span class="type">SQL_standard_keyword_behavior</span> = conf.ansiEnabled</span><br><span class="line"></span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">      <span class="keyword">try</span> &#123;</span><br><span class="line">        <span class="comment">// first, try parsing with potentially faster SLL mode</span></span><br><span class="line">        parser.getInterpreter.setPredictionMode(<span class="type">PredictionMode</span>.<span class="type">SLL</span>)</span><br><span class="line">        toResult(parser)</span><br><span class="line">      &#125;</span><br><span class="line">      <span class="keyword">catch</span> &#123;</span><br><span class="line">        ...</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">catch</span> &#123;</span><br><span class="line">      ...</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h1 id="3-Analyzer"><a href="#3-Analyzer" class="headerlink" title="3. Analyzer"></a>3. Analyzer</h1><p>经过 Parser 阶段后的 Unresolved Logical Plan 仅仅是一种数据结构，不包含任何数据信息，Analyzer 阶段会使用预先定义好的规则（Rule）以及 Catalog 字典表等信息对未解析的逻辑计划进行 transform 转换，替换 Unresolved Logical Plan 这颗 AST（Abstract Syntax Tree）树中的节点，得到 Resolved Logical Plan。</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">== Analyzed Logical Plan ==</span><br><span class="line">sum(v): double</span><br><span class="line">Aggregate [sum(v#0) AS sum(v)#8]</span><br><span class="line">+- SubqueryAlias tmp</span><br><span class="line">   +- Project [id#4, ((cast((100 + 80) as double) + math_score#5) + english_score#6) AS v#0]</span><br><span class="line">      +- Filter ((id#1 = id#4) AND (age#3 &gt; 10))</span><br><span class="line">         +- Join Inner</span><br><span class="line">            :- SubqueryAlias spark_catalog.kwang.people</span><br><span class="line">            :  +- Relation kwang.people[id#1,name#2,age#3] orc</span><br><span class="line">            +- SubqueryAlias spark_catalog.kwang.score</span><br><span class="line">               +- Relation kwang.score[id#4,math_score#5,english_score#6] orc</span><br></pre></td></tr></table></figure>
+
+
+
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/05/14/7a2b74e9cf9987503c6a849d420b3d80-1652439254182-b7942212-d174-4d5d-931a-cb8f634fe8b1-b988db.png" alt="img"></p>
+<p>继续跟进经过 Parser 解析后 Analyzer 逻辑。</p>
+<p>进入 Dataset 对象的 ofRows 函数。该函数第一行是构建 QueryExecution 对象，第二行是对逻辑计划进行确认分析，里面涉及到具体的分析操作。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/spark/sql/SparkSession.scala</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">sql</span></span>(sqlText: <span class="type">String</span>): <span class="type">DataFrame</span> = withActive &#123;</span><br><span class="line">    <span class="keyword">val</span> tracker = <span class="keyword">new</span> <span class="type">QueryPlanningTracker</span></span><br><span class="line">    <span class="keyword">val</span> plan = tracker.measurePhase(<span class="type">QueryPlanningTracker</span>.<span class="type">PARSING</span>) &#123;</span><br><span class="line">      sessionState.sqlParser.parsePlan(sqlText)</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="type">Dataset</span>.ofRows(self, plan, tracker)</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 位置：org/apache/spark/sql/Dataset.scala</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">ofRows</span></span>(sparkSession: <span class="type">SparkSession</span>, logicalPlan: <span class="type">LogicalPlan</span>, tracker: <span class="type">QueryPlanningTracker</span>)</span><br><span class="line">    : <span class="type">DataFrame</span> = sparkSession.withActive &#123;</span><br><span class="line">    <span class="comment">// 构建QueryExecution对象</span></span><br><span class="line">    <span class="keyword">val</span> qe = <span class="keyword">new</span> <span class="type">QueryExecution</span>(sparkSession, logicalPlan, tracker)</span><br><span class="line">    qe.assertAnalyzed()</span><br><span class="line">    <span class="keyword">new</span> <span class="type">Dataset</span>[<span class="type">Row</span>](qe, <span class="type">RowEncoder</span>(qe.analyzed.schema))</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line"></span><br><span class="line"><span class="comment">// 位置：org/apache/spark/sql/execution/QueryExecution.scala</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">assertAnalyzed</span></span>(): <span class="type">Unit</span> = analyzed</span><br><span class="line"></span><br><span class="line">  <span class="keyword">lazy</span> <span class="keyword">val</span> analyzed: <span class="type">LogicalPlan</span> = executePhase(<span class="type">QueryPlanningTracker</span>.<span class="type">ANALYSIS</span>) &#123;</span><br><span class="line">    <span class="comment">// We can&#x27;t clone `logical` here, which will reset the `_analyzed` flag.</span></span><br><span class="line">    sparkSession.sessionState.analyzer.executeAndCheck(logical, tracker)</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>分析操作是在 executeAndCheck 方法中完成的，分析流程是利用一套既定的 Rule 规则对 AST 树进行解析，包括 Catalog 绑定、字段解析、函数解析等操作，得到 Resolved Logical Plan。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/spark/sql/catalyst/analysis/Analyzer.scala</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">executeAndCheck</span></span>(plan: <span class="type">LogicalPlan</span>, tracker: <span class="type">QueryPlanningTracker</span>): <span class="type">LogicalPlan</span> = &#123;</span><br><span class="line">    <span class="keyword">if</span> (plan.analyzed) <span class="keyword">return</span> plan</span><br><span class="line">    <span class="type">AnalysisHelper</span>.markInAnalyzer &#123;</span><br><span class="line">      <span class="comment">// 执行Analyzer操作</span></span><br><span class="line">      <span class="keyword">val</span> analyzed = executeAndTrack(plan, tracker)</span><br><span class="line">      <span class="keyword">try</span> &#123;</span><br><span class="line">        checkAnalysis(analyzed)</span><br><span class="line">        analyzed</span><br><span class="line">      &#125; <span class="keyword">catch</span> &#123;</span><br><span class="line">        <span class="keyword">case</span> e: <span class="type">AnalysisException</span> =&gt;</span><br><span class="line">          <span class="keyword">val</span> ae = e.copy(plan = <span class="type">Option</span>(analyzed))</span><br><span class="line">          ae.setStackTrace(e.getStackTrace)</span><br><span class="line">          <span class="keyword">throw</span> ae</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 位置：org/apache/spark/sql/catalyst/rules/RuleExecutor.scala</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">executeAndTrack</span></span>(plan: <span class="type">TreeType</span>, tracker: <span class="type">QueryPlanningTracker</span>): <span class="type">TreeType</span> = &#123;</span><br><span class="line">    <span class="type">QueryPlanningTracker</span>.withTracker(tracker) &#123;</span><br><span class="line">      <span class="comment">// RuleExecutor 执行器执行 Analyzer 分析操作的入口</span></span><br><span class="line">      execute(plan)</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>这里提一下 Analyzer 是如何利用 Rule 规则进行解析的。Rule 规则是 Analyzer 解析的关键，RuleExecutor 执行器则对 Rule 规则进行处理，当然 RuleExecutor 并不是执行对 Rule 产生作用，而是执行由一个或多个 Rule 构成的 Batch 的集合 Batches。RuleExecutor 每次对 Batches 进行执行，先按一个一个 Batch 顺序执行，然后对 Batch 里的每条 Rule 顺序执行，执行的方式分为两种，每个 Batch 会执行一次（Once）或者多次（FixedPoint，由参数 <code>spark.sql.analyzer.maxIterations</code>决定，默认值为 100），如果是进行 FixedPoint 多次迭代，当分析结果到达一个固定点或者到达最大迭代次数时则迭代停止。执行过程如下：</p>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/05/14/e9885db74baa117d2a24e14c5ecce521-1652536630800-37d4f104-2270-43bf-8a1b-2298ebae1b7d-946743.png" alt="img"></p>
+<p>这里列举了 Analyzer 对象中一系列 Rule 规则集合 batches 的定义，同时附有解析规则与转换操作的映射关系（图为 Spark2.x 版本的转换操作，在 3.x 中会有所出入，仅供参考）。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/spark/sql/catalyst/analysis/Analyzer.scala</span></span><br><span class="line">  <span class="keyword">override</span> <span class="function"><span class="keyword">def</span> <span class="title">batches</span></span>: <span class="type">Seq</span>[<span class="type">Batch</span>] = <span class="type">Seq</span>(</span><br><span class="line">    <span class="type">Batch</span>(<span class="string">&quot;Substitution&quot;</span>, fixedPoint,</span><br><span class="line">      <span class="comment">// This rule optimizes `UpdateFields` expression chains so looks more like optimization rule.</span></span><br><span class="line">      <span class="comment">// However, when manipulating deeply nested schema, `UpdateFields` expression tree could be</span></span><br><span class="line">      <span class="comment">// very complex and make analysis impossible. Thus we need to optimize `UpdateFields` early</span></span><br><span class="line">      <span class="comment">// at the beginning of analysis.</span></span><br><span class="line">      <span class="type">OptimizeUpdateFields</span>,</span><br><span class="line">      <span class="type">CTESubstitution</span>,</span><br><span class="line">      <span class="type">WindowsSubstitution</span>,</span><br><span class="line">      <span class="type">EliminateUnions</span>,</span><br><span class="line">      <span class="type">SubstituteUnresolvedOrdinals</span>),</span><br><span class="line">    <span class="type">Batch</span>(<span class="string">&quot;Disable Hints&quot;</span>, <span class="type">Once</span>,</span><br><span class="line">      <span class="keyword">new</span> <span class="type">ResolveHints</span>.<span class="type">DisableHints</span>),</span><br><span class="line">    <span class="type">Batch</span>(<span class="string">&quot;Hints&quot;</span>, fixedPoint,</span><br><span class="line">      <span class="type">ResolveHints</span>.<span class="type">ResolveJoinStrategyHints</span>,</span><br><span class="line">      <span class="type">ResolveHints</span>.<span class="type">ResolveCoalesceHints</span>),</span><br><span class="line">    <span class="type">Batch</span>(<span class="string">&quot;Simple Sanity Check&quot;</span>, <span class="type">Once</span>,</span><br><span class="line">      <span class="type">LookupFunctions</span>),</span><br><span class="line">    ...</span><br><span class="line">  )</span><br></pre></td></tr></table></figure>
+
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/05/14/2e04e93281e0da64f716375cee65cb27-1652536572613-32fb9511-6180-49ad-9140-03a7344869d5-0671d4.png" alt="img"></p>
+<h1 id="4-Optimizer"><a href="#4-Optimizer" class="headerlink" title="4. Optimizer"></a>4. Optimizer</h1><p>此部分主要是  Resolved Logical Plan 进行优化，常见的优化规则如常量合并、谓词下推、列裁剪等。通过如下的 Optimized Logical Plan 可以看到其优化规则：</p>
+<ul>
+<li><p>常量合并（ConstantFolding）。包括常量累加和常量替换，常量累加比如这里的 100+80 优化为 180，常量替换比如 where i = 100 and j = i + 80 优化为 where i = 100 and j = 180。</p>
+</li>
+<li><p>谓词下推（PushDownPredicate）：将过滤条件 Filter 从 Join 条件上面下推到 Join 条件下面，让 Filter 条件尽可能下沉到数据源端，减少 Join 的数据量。</p>
+</li>
+<li><p>列裁剪（ColumnPruning）。减少读取不必要的列，比如这里 kwnag.people 表中的 name#2 字段。</p>
+</li>
+</ul>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">== Optimized Logical Plan ==</span><br><span class="line">Aggregate [sum(v#0) AS sum(v)#8]</span><br><span class="line">+- Project [((180.0 + math_score#5) + english_score#6) AS v#0]</span><br><span class="line">   +- Join Inner, (id#1 = id#4)</span><br><span class="line">      :- Project [id#1]</span><br><span class="line">      :  +- Filter ((isnotnull(age#3) AND (age#3 &gt; 10)) AND isnotnull(id#1))</span><br><span class="line">      :     +- Relation kwang.people[id#1,name#2,age#3] orc</span><br><span class="line">      +- Filter isnotnull(id#4)</span><br><span class="line">         +- Relation kwang.score[id#4,math_score#5,english_score#6] orc</span><br></pre></td></tr></table></figure>
+
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/05/14/c16ec586b047555b23e0633527e5ef43-1652439275836-fc640ee9-5d02-4925-a181-701328ae1fab-cc83bc.png" alt="img"></p>
+<p>Optimizer 的执行逻辑都有通过 QueryExecution 对象中的 lazy 变量执行代码块触发的，</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/spark/sql/execution/QueryExecution.scala</span></span><br><span class="line">  <span class="keyword">private</span> <span class="function"><span class="keyword">def</span> <span class="title">assertOptimized</span></span>(): <span class="type">Unit</span> = optimizedPlan</span><br><span class="line"></span><br><span class="line">  <span class="keyword">lazy</span> <span class="keyword">val</span> optimizedPlan: <span class="type">LogicalPlan</span> = &#123;</span><br><span class="line">    <span class="comment">// We need to materialize the commandExecuted here because optimizedPlan is also tracked under</span></span><br><span class="line">    <span class="comment">// the optimizing phase</span></span><br><span class="line">    assertCommandExecuted()</span><br><span class="line">    executePhase(<span class="type">QueryPlanningTracker</span>.<span class="type">OPTIMIZATION</span>) &#123;</span><br><span class="line">      <span class="comment">// clone the plan to avoid sharing the plan instance between different stages like analyzing,</span></span><br><span class="line">      <span class="comment">// optimizing and planning.</span></span><br><span class="line">      <span class="comment">// 执行Optimizer操作</span></span><br><span class="line">      <span class="keyword">val</span> plan =</span><br><span class="line">        sparkSession.sessionState.optimizer.executeAndTrack(withCachedData.clone(), tracker)</span><br><span class="line">      <span class="comment">// We do not want optimized plans to be re-analyzed as literals that have been constant</span></span><br><span class="line">      <span class="comment">// folded and such can cause issues during analysis. While `clone` should maintain the</span></span><br><span class="line">      <span class="comment">// `analyzed` state of the LogicalPlan, we set the plan as analyzed here as well out of</span></span><br><span class="line">      <span class="comment">// paranoia.</span></span><br><span class="line">      plan.setAnalyzed()</span><br><span class="line">      plan</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>Optimizer 优化和 Analyzer 分析都是基于 Rule 的执行，同样分为 Once 和 FixedPoint 两种，由 RuleExecutor 自行器执行，当执行到不动点或者最大迭代次数就退出优化，得到 Optimized Logical Plan。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/spark/sql/catalyst/rules/RuleExecutor.scala</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">executeAndTrack</span></span>(plan: <span class="type">TreeType</span>, tracker: <span class="type">QueryPlanningTracker</span>): <span class="type">TreeType</span> = &#123;</span><br><span class="line">    <span class="type">QueryPlanningTracker</span>.withTracker(tracker) &#123;</span><br><span class="line">      <span class="comment">// RuleExecutor 执行器执行 Optimizer 优化操作的入口</span></span><br><span class="line">      execute(plan)</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>同样，这里也列举了 Optimizer 对象中一系列 Rule 规则集合 batches 的定义，同时附有优化规则与转换操作的映射关系（图为 Spark2.x 版本的转换操作，在 3.x 中会有所出入，仅供参考）。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/spark/sql/catalyst/optimizer/Optimizer.scala</span></span><br><span class="line">    <span class="keyword">val</span> batches = (<span class="type">Batch</span>(<span class="string">&quot;Eliminate Distinct&quot;</span>, <span class="type">Once</span>, <span class="type">EliminateDistinct</span>) ::</span><br><span class="line">    <span class="comment">// Technically some of the rules in Finish Analysis are not optimizer rules and belong more</span></span><br><span class="line">    <span class="comment">// in the analyzer, because they are needed for correctness (e.g. ComputeCurrentTime).</span></span><br><span class="line">    <span class="comment">// However, because we also use the analyzer to canonicalized queries (for view definition),</span></span><br><span class="line">    <span class="comment">// we do not eliminate subqueries or compute current time in the analyzer.</span></span><br><span class="line">    <span class="type">Batch</span>(<span class="string">&quot;Finish Analysis&quot;</span>, <span class="type">Once</span>,</span><br><span class="line">      <span class="type">EliminateResolvedHint</span>,</span><br><span class="line">      <span class="type">EliminateSubqueryAliases</span>,</span><br><span class="line">      <span class="type">EliminateView</span>,</span><br><span class="line">      <span class="type">InlineCTE</span>,</span><br><span class="line">      <span class="type">ReplaceExpressions</span>,</span><br><span class="line">      <span class="type">RewriteNonCorrelatedExists</span>,</span><br><span class="line">      <span class="type">PullOutGroupingExpressions</span>,</span><br><span class="line">      <span class="type">ComputeCurrentTime</span>,</span><br><span class="line">      <span class="type">ReplaceCurrentLike</span>(catalogManager),</span><br><span class="line">      <span class="type">SpecialDatetimeValues</span>) ::</span><br><span class="line">    <span class="comment">//////////////////////////////////////////////////////////////////////////////////////////</span></span><br><span class="line">    <span class="comment">// Optimizer rules start here</span></span><br><span class="line">    <span class="type">Batch</span>(<span class="string">&quot;Union&quot;</span>, <span class="type">Once</span>,</span><br><span class="line">      <span class="type">RemoveNoopOperators</span>,</span><br><span class="line">      <span class="type">CombineUnions</span>,</span><br><span class="line">      <span class="type">RemoveNoopUnion</span>) ::</span><br><span class="line">    <span class="type">Batch</span>(<span class="string">&quot;OptimizeLimitZero&quot;</span>, <span class="type">Once</span>,</span><br><span class="line">      <span class="type">OptimizeLimitZero</span>) ::</span><br><span class="line">    <span class="comment">// Run this once earlier. This might simplify the plan and reduce cost of optimizer.</span></span><br><span class="line">    <span class="comment">// For example, a query such as Filter(LocalRelation) would go through all the heavy</span></span><br><span class="line">    <span class="comment">// optimizer rules that are triggered when there is a filter</span></span><br><span class="line">    <span class="comment">// (e.g. InferFiltersFromConstraints). If we run this batch earlier, the query becomes just</span></span><br><span class="line">    <span class="comment">// LocalRelation and does not trigger many rules.</span></span><br><span class="line">    <span class="type">Batch</span>(<span class="string">&quot;LocalRelation early&quot;</span>, fixedPoint,</span><br><span class="line">      <span class="type">ConvertToLocalRelation</span>,</span><br><span class="line">      <span class="type">PropagateEmptyRelation</span>,</span><br><span class="line">      <span class="comment">// PropagateEmptyRelation can change the nullability of an attribute from nullable to</span></span><br><span class="line">      <span class="comment">// non-nullable when an empty relation child of a Union is removed</span></span><br><span class="line">      <span class="type">UpdateAttributeNullability</span>) ::</span><br><span class="line">    ...</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/05/14/66f47feec84185917a71e3bace6ba9bd-1652536837205-dfd52875-1ed8-4af6-8176-429d2b50a5ae-c4b6a0.png" alt="img"></p>
+<h1 id="5-SparkPlan"><a href="#5-SparkPlan" class="headerlink" title="5. SparkPlan"></a>5. SparkPlan</h1><p>此部分是将 Optimized Logical Plan 根据预先设定的映射逻辑转换为 Physical Plan（Physical Plan = SparkPlan），以获取树节点的真实属性，比如 Relation 算子变为 FileSourceScanExec 算子，Join 算子变为 SortMergeJoinExec 算子，SparkPlan 中的物理算子都是可执行的算子，一般以 Exec 结尾。</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">== Physical Plan ==</span><br><span class="line">AdaptiveSparkPlan isFinalPlan=false</span><br><span class="line">+- HashAggregate(keys=[], functions=[sum(v#0)], output=[sum(v)#8])</span><br><span class="line">   +- Exchange SinglePartition, ENSURE_REQUIREMENTS, [id=#40]</span><br><span class="line">      +- HashAggregate(keys=[], functions=[partial_sum(v#0)], output=[sum#17])</span><br><span class="line">         +- Project [((180.0 + math_score#5) + english_score#6) AS v#0]</span><br><span class="line">            +- BroadcastHashJoin [id#1], [id#4], Inner, BuildLeft, false</span><br><span class="line">               :- BroadcastExchange HashedRelationBroadcastMode(List(cast(input[0, int, true] as bigint)),false), [id=#35]</span><br><span class="line">               :  +- Project [id#1]</span><br><span class="line">               :     +- Filter ((isnotnull(age#3) AND (age#3 &gt; 10)) AND isnotnull(id#1))</span><br><span class="line">               :        +- FileScan orc kwang.people[id#1,age#3] Batched: true, DataFilters: [isnotnull(age#3), (age#3 &gt; 10), isnotnull(id#1)], Format: ORC, Location: InMemoryFileIndex(1 paths)[file:/E:/code/personal/bigdata-manager/spark-warehouse/kwang.db/people], PartitionFilters: [], PushedFilters: [IsNotNull(age), GreaterThan(age,10), IsNotNull(id)], ReadSchema: struct&lt;id:int,age:int&gt;</span><br><span class="line">               +- Filter isnotnull(id#4)</span><br><span class="line">                  +- FileScan orc kwang.score[id#4,math_score#5,english_score#6] Batched: true, DataFilters: [isnotnull(id#4)], Format: ORC, Location: InMemoryFileIndex(1 paths)[file:/E:/code/personal/bigdata-manager/spark-warehouse/kwang.db/score], PartitionFilters: [], PushedFilters: [IsNotNull(id)], ReadSchema: struct&lt;id:int,math_score:double,english_score:double&gt;</span><br><span class="line">                  </span><br><span class="line">注：&#x27;*&#x27; 表示当前节点可以动态生成代码。</span><br></pre></td></tr></table></figure>
+
+<p>SparkPlanner 也是类似 Analyzer和Optimizer， 使用类似基于规则（Rules 和 Batches） 的方式对逻辑计划树进行转换， 这里的规则称为策略（Strategies） ，SparkPlan 通过在 Optimizer Logical Plan 树上应用策略（Strategies），从而生成 SparkPlan 列表 Iterator[SparkPlan]，然后调用 next() 获取第一个 SparkPlan。<br><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/05/14/5227f5ad08005528d7d0c278120bf3a1-1652536864919-079b4d11-4ce2-4cad-bb08-dd6410efaeb5-20220514222748456-4a14c1.png" alt="img"></p>
+<p>这里 sparkPlan 还是通过 lazy 变量加载，对前面 optimizedPlan 进行转化生成 SparkPlan 列表，然后调用 next 返回第一个 SparkPlan。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/spark/sql/execution/QueryExecution.scala</span></span><br><span class="line">  <span class="keyword">lazy</span> <span class="keyword">val</span> sparkPlan: <span class="type">SparkPlan</span> = withCteMap &#123;</span><br><span class="line">    <span class="comment">// We need to materialize the optimizedPlan here because sparkPlan is also tracked under</span></span><br><span class="line">    <span class="comment">// the planning phase</span></span><br><span class="line">    assertOptimized()</span><br><span class="line">    executePhase(<span class="type">QueryPlanningTracker</span>.<span class="type">PLANNING</span>) &#123;</span><br><span class="line">      <span class="comment">// 将 LogicalPlan 转换为 SparkPlan</span></span><br><span class="line">      <span class="type">QueryExecution</span>.createSparkPlan(sparkSession, planner, optimizedPlan.clone())</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="comment">/**</span></span><br><span class="line"><span class="comment">   * Transform a [[LogicalPlan]] into a [[SparkPlan]].</span></span><br><span class="line"><span class="comment">   *</span></span><br><span class="line"><span class="comment">   * Note that the returned physical plan still needs to be prepared for execution.</span></span><br><span class="line"><span class="comment">   */</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">createSparkPlan</span></span>(</span><br><span class="line">      sparkSession: <span class="type">SparkSession</span>,</span><br><span class="line">      planner: <span class="type">SparkPlanner</span>,</span><br><span class="line">      plan: <span class="type">LogicalPlan</span>): <span class="type">SparkPlan</span> = &#123;</span><br><span class="line">    <span class="comment">// 通过 QueryPlan 执行 SparkPlan 转换操作</span></span><br><span class="line">    <span class="comment">// plan方法应用strategies策略后生成SparkPlan列表Iterator[SparkPlan],调用next()获取第一个SparkPlan</span></span><br><span class="line">    planner.plan(<span class="type">ReturnAnswer</span>(plan)).next()</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>上面的 planner 对象是 SparkPlanner，其 plan 方法内部调用是其父类 QueryPlan 的 plan 方法来执行策略的。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/spark/sql/execution/SparkStrategies.scala</span></span><br><span class="line"><span class="keyword">abstract</span> <span class="class"><span class="keyword">class</span> <span class="title">SparkStrategies</span> <span class="keyword">extends</span> <span class="title">QueryPlanner</span>[<span class="type">SparkPlan</span>] </span>&#123;</span><br><span class="line">  self: <span class="type">SparkPlanner</span> =&gt;</span><br><span class="line"></span><br><span class="line">  <span class="keyword">override</span> <span class="function"><span class="keyword">def</span> <span class="title">plan</span></span>(plan: <span class="type">LogicalPlan</span>): <span class="type">Iterator</span>[<span class="type">SparkPlan</span>] = &#123;</span><br><span class="line">    <span class="keyword">super</span>.plan(plan).map &#123; p =&gt;</span><br><span class="line">      <span class="keyword">val</span> logicalPlan = plan <span class="keyword">match</span> &#123;</span><br><span class="line">        <span class="keyword">case</span> <span class="type">ReturnAnswer</span>(rootPlan) =&gt; rootPlan</span><br><span class="line">        <span class="keyword">case</span> _ =&gt; plan</span><br><span class="line">      &#125;</span><br><span class="line">      p.setLogicalLink(logicalPlan)</span><br><span class="line">      p</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>如下是 SparkPlaner 对象中定义的 strategies 策略，还可以通过 experimentalMethods.extraStrategies 从外部加载自定义的策略。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/spark/sql/execution/SparkPlanner.scala</span></span><br><span class="line">  <span class="keyword">override</span> <span class="function"><span class="keyword">def</span> <span class="title">strategies</span></span>: <span class="type">Seq</span>[<span class="type">Strategy</span>] =</span><br><span class="line">    experimentalMethods.extraStrategies ++</span><br><span class="line">      extraPlanningStrategies ++ (</span><br><span class="line">      <span class="type">LogicalQueryStageStrategy</span> ::</span><br><span class="line">      <span class="type">PythonEvals</span> ::</span><br><span class="line">      <span class="keyword">new</span> <span class="type">DataSourceV2Strategy</span>(session) ::</span><br><span class="line">      <span class="type">FileSourceStrategy</span> ::</span><br><span class="line">      <span class="type">DataSourceStrategy</span> ::</span><br><span class="line">      <span class="type">SpecialLimits</span> ::</span><br><span class="line">      <span class="type">Aggregation</span> ::</span><br><span class="line">      <span class="type">Window</span> ::</span><br><span class="line">      <span class="type">JoinSelection</span> ::</span><br><span class="line">      <span class="type">InMemoryScans</span> ::</span><br><span class="line">      <span class="type">SparkScripts</span> ::</span><br><span class="line">      <span class="type">WithCTEStrategy</span> ::</span><br><span class="line">      <span class="type">BasicOperators</span> :: <span class="type">Nil</span>)</span><br></pre></td></tr></table></figure>
+
+<p>进行转换的操作如下，具体转换逻辑还待研究，最终是对到一些列的 SparkPlan，选择其中性能较好的 SparkPlan。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/spark/sql/catalyst/planning/QueryPlanner.scala</span></span><br><span class="line"><span class="keyword">abstract</span> <span class="class"><span class="keyword">class</span> <span class="title">QueryPlanner</span>[<span class="type">PhysicalPlan</span> &lt;: <span class="type">TreeNode</span>[<span class="type">PhysicalPlan</span>]] </span>&#123;</span><br><span class="line">  <span class="comment">/** A list of execution strategies that can be used by the planner */</span></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">strategies</span></span>: <span class="type">Seq</span>[<span class="type">GenericStrategy</span>[<span class="type">PhysicalPlan</span>]]</span><br><span class="line"></span><br><span class="line">  <span class="function"><span class="keyword">def</span> <span class="title">plan</span></span>(plan: <span class="type">LogicalPlan</span>): <span class="type">Iterator</span>[<span class="type">PhysicalPlan</span>] = &#123;</span><br><span class="line">    <span class="comment">// Obviously a lot to do here still...</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">// Collect physical plan candidates.</span></span><br><span class="line">    <span class="keyword">val</span> candidates = strategies.iterator.flatMap(_(plan))</span><br><span class="line"></span><br><span class="line">    <span class="comment">// The candidates may contain placeholders marked as [[planLater]],</span></span><br><span class="line">    <span class="comment">// so try to replace them by their child plans.</span></span><br><span class="line">    <span class="keyword">val</span> plans = candidates.flatMap &#123; candidate =&gt;</span><br><span class="line">      <span class="keyword">val</span> placeholders = collectPlaceholders(candidate)</span><br><span class="line"></span><br><span class="line">      <span class="keyword">if</span> (placeholders.isEmpty) &#123;</span><br><span class="line">        <span class="comment">// Take the candidate as is because it does not contain placeholders.</span></span><br><span class="line">        <span class="type">Iterator</span>(candidate)</span><br><span class="line">      &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        <span class="comment">// Plan the logical plan marked as [[planLater]] and replace the placeholders.</span></span><br><span class="line">        placeholders.iterator.foldLeft(<span class="type">Iterator</span>(candidate)) &#123;</span><br><span class="line">          <span class="keyword">case</span> (candidatesWithPlaceholders, (placeholder, logicalPlan)) =&gt;</span><br><span class="line">            <span class="comment">// Plan the logical plan for the placeholder.</span></span><br><span class="line">            <span class="keyword">val</span> childPlans = <span class="keyword">this</span>.plan(logicalPlan)</span><br><span class="line"></span><br><span class="line">            candidatesWithPlaceholders.flatMap &#123; candidateWithPlaceholders =&gt;</span><br><span class="line">              childPlans.map &#123; childPlan =&gt;</span><br><span class="line">                <span class="comment">// Replace the placeholder by the child plan</span></span><br><span class="line">                candidateWithPlaceholders.transformUp &#123;</span><br><span class="line">                  <span class="keyword">case</span> p <span class="keyword">if</span> p.eq(placeholder) =&gt; childPlan</span><br><span class="line">                &#125;</span><br><span class="line">              &#125;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">val</span> pruned = prunePlans(plans)</span><br><span class="line">    assert(pruned.hasNext, <span class="string">s&quot;No plan for <span class="subst">$plan</span>&quot;</span>)</span><br><span class="line">    pruned</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<h1 id="6-SparkPlan执行"><a href="#6-SparkPlan执行" class="headerlink" title="6. SparkPlan执行"></a>6. SparkPlan执行</h1><p>调用 next() 方法拿到一个 SparkPlan 后，就需要开始执行 SparkPlan，SparkPlan 的 执行方式均为调用其 execute() 方法生成 RDD。如下面例子所示：</p>
+<p><img src="https://cdn.jsdelivr.net/gh/benkoons/blog-imgs/blog-imgs/2022/05/14/0ee351bfe5ac7b751e902677f56714d0-1652537095240-9ed27ef2-c39e-477a-9e11-8dc7d045907c-8ff54a.png" alt="img"></p>
+<p>execute() 内部在调用 doExecute() 执行具体的算子操作，如果算子节点属于 BinaryExecNode 或 UnaryExecNode，则需要先递归执行子孩子节点的 doExecute() 方法。 </p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/spark/sql/execution/QueryExecution.scala</span></span><br><span class="line"><span class="keyword">lazy</span> <span class="keyword">val</span> toRdd: <span class="type">RDD</span>[<span class="type">InternalRow</span>] = <span class="keyword">new</span> <span class="type">SQLExecutionRDD</span>(</span><br><span class="line">    executedPlan.execute(), sparkSession.sessionState.conf)</span><br><span class="line"></span><br><span class="line"><span class="comment">// 位置：org/apache/spark/sql/execution/SparkPlan.scala</span></span><br><span class="line">  <span class="keyword">final</span> <span class="function"><span class="keyword">def</span> <span class="title">execute</span></span>(): <span class="type">RDD</span>[<span class="type">InternalRow</span>] = executeQuery &#123;</span><br><span class="line">    <span class="keyword">if</span> (isCanonicalizedPlan) &#123;</span><br><span class="line">      <span class="keyword">throw</span> <span class="keyword">new</span> <span class="type">IllegalStateException</span>(<span class="string">&quot;A canonicalized plan is not supposed to be executed.&quot;</span>)</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="comment">// 执行具体Exec物理算子</span></span><br><span class="line">    doExecute()</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="keyword">protected</span> <span class="function"><span class="keyword">def</span> <span class="title">doExecute</span></span>(): <span class="type">RDD</span>[<span class="type">InternalRow</span>]</span><br></pre></td></tr></table></figure>
+
+<p>toRdd 方法内部在真正执行 execute 前，还需要加载 lazy 变量 executedPlan，目的是将前面得到的 SparkPlan 转化为可执行的 SparkPlan，得到 executedPlan SparkPlan 前，还会并将定义好 Rule 集合的 preparations 规则应用到 SparkPlan，执行相应的规则得到真正可执行的 SparkPlan 并通过 execute() 执行。</p>
+<figure class="highlight scala"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 位置：org/apache/spark/sql/execution/QueryExecution.scala</span></span><br><span class="line">  <span class="keyword">lazy</span> <span class="keyword">val</span> executedPlan: <span class="type">SparkPlan</span> = withCteMap &#123;</span><br><span class="line">    <span class="comment">// We need to materialize the optimizedPlan here, before tracking the planning phase, to ensure</span></span><br><span class="line">    <span class="comment">// that the optimization time is not counted as part of the planning phase.</span></span><br><span class="line">    assertOptimized()</span><br><span class="line">    executePhase(<span class="type">QueryPlanningTracker</span>.<span class="type">PLANNING</span>) &#123;</span><br><span class="line">      <span class="comment">// SparkPlan执行前的准备工作</span></span><br><span class="line">      <span class="type">QueryExecution</span>.prepareForExecution(preparations, sparkPlan.clone())</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 位置：org/apache/spark/sql/execution/QueryExecution.scala</span></span><br><span class="line">  <span class="keyword">private</span>[execution] <span class="function"><span class="keyword">def</span> <span class="title">prepareForExecution</span></span>(</span><br><span class="line">      preparations: <span class="type">Seq</span>[<span class="type">Rule</span>[<span class="type">SparkPlan</span>]],</span><br><span class="line">      plan: <span class="type">SparkPlan</span>): <span class="type">SparkPlan</span> = &#123;</span><br><span class="line">    <span class="keyword">val</span> planChangeLogger = <span class="keyword">new</span> <span class="type">PlanChangeLogger</span>[<span class="type">SparkPlan</span>]()</span><br><span class="line">    <span class="comment">// 将preparations中的Rule应用到SparkPlan</span></span><br><span class="line">    <span class="keyword">val</span> preparedPlan = preparations.foldLeft(plan) &#123; <span class="keyword">case</span> (sp, rule) =&gt;</span><br><span class="line">      <span class="keyword">val</span> result = rule.apply(sp)</span><br><span class="line">      planChangeLogger.logRule(rule.ruleName, sp, result)</span><br><span class="line">      result</span><br><span class="line">    &#125;</span><br><span class="line">    planChangeLogger.logBatch(<span class="string">&quot;Preparations&quot;</span>, plan, preparedPlan)</span><br><span class="line">    preparedPlan</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 位置：org/apache/spark/sql/execution/QueryExecution.scala</span></span><br><span class="line">  <span class="comment">// 获取preparations规则</span></span><br><span class="line">  <span class="keyword">protected</span> <span class="function"><span class="keyword">def</span> <span class="title">preparations</span></span>: <span class="type">Seq</span>[<span class="type">Rule</span>[<span class="type">SparkPlan</span>]] = &#123;</span><br><span class="line">    <span class="type">QueryExecution</span>.preparations(sparkSession,</span><br><span class="line">      <span class="type">Option</span>(<span class="type">InsertAdaptiveSparkPlan</span>(<span class="type">AdaptiveExecutionContext</span>(sparkSession, <span class="keyword">this</span>))), <span class="literal">false</span>)</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 位置：org/apache/spark/sql/execution/QueryExecution.scala</span></span><br><span class="line">  <span class="keyword">private</span>[execution] <span class="function"><span class="keyword">def</span> <span class="title">preparations</span></span>(</span><br><span class="line">      sparkSession: <span class="type">SparkSession</span>,</span><br><span class="line">      adaptiveExecutionRule: <span class="type">Option</span>[<span class="type">InsertAdaptiveSparkPlan</span>] = <span class="type">None</span>,</span><br><span class="line">      subquery: <span class="type">Boolean</span>): <span class="type">Seq</span>[<span class="type">Rule</span>[<span class="type">SparkPlan</span>]] = &#123;</span><br><span class="line">    <span class="comment">// `AdaptiveSparkPlanExec` is a leaf node. If inserted, all the following rules will be no-op</span></span><br><span class="line">    <span class="comment">// as the original plan is hidden behind `AdaptiveSparkPlanExec`.</span></span><br><span class="line">    adaptiveExecutionRule.toSeq ++</span><br><span class="line">    <span class="type">Seq</span>(</span><br><span class="line">      <span class="type">CoalesceBucketsInJoin</span>,</span><br><span class="line">      <span class="type">PlanDynamicPruningFilters</span>(sparkSession),</span><br><span class="line">      <span class="type">PlanSubqueries</span>(sparkSession),</span><br><span class="line">      <span class="type">RemoveRedundantProjects</span>,</span><br><span class="line">      <span class="type">EnsureRequirements</span>(),</span><br><span class="line">      <span class="comment">// `RemoveRedundantSorts` needs to be added after `EnsureRequirements` to guarantee the same</span></span><br><span class="line">      <span class="comment">// number of partitions when instantiating PartitioningCollection.</span></span><br><span class="line">      <span class="type">RemoveRedundantSorts</span>,</span><br><span class="line">      <span class="type">DisableUnnecessaryBucketedScan</span>,</span><br><span class="line">      <span class="type">ApplyColumnarRulesAndInsertTransitions</span>(</span><br><span class="line">        sparkSession.sessionState.columnarRules, outputsColumnar = <span class="literal">false</span>),</span><br><span class="line">      <span class="type">CollapseCodegenStages</span>()) ++</span><br><span class="line">      (<span class="keyword">if</span> (subquery) &#123;</span><br><span class="line">        <span class="type">Nil</span></span><br><span class="line">      &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        <span class="type">Seq</span>(<span class="type">ReuseExchangeAndSubquery</span>)</span><br><span class="line">      &#125;)</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>至此，整个 SparkSQL 解析流程就完结了。</p>
+<h1 id="参考资料"><a href="#参考资料" class="headerlink" title="参考资料"></a>参考资料</h1><ul>
+<li><p><a target="_blank" rel="noopener" href="https://www.turbofei.wang/spark/2018/08/01/spark-sql-catalyst#code-generation">https://www.turbofei.wang/spark/2018/08/01/spark-sql-catalyst#code-generation</a></p>
+</li>
+<li><p><a target="_blank" rel="noopener" href="https://www.turbofei.wang/spark/2018/07/27/Spark-Sql-Analysis#sql-%E8%AF%AD%E5%8F%A5--unresolved-logicalplan">https://www.turbofei.wang/spark/2018/07/27/Spark-Sql-Analysis#sql-%E8%AF%AD%E5%8F%A5–unresolved-logicalplan</a></p>
+</li>
+<li><p><a target="_blank" rel="noopener" href="https://blog.csdn.net/Happy_Sunshine_Boy/article/details/108519396">https://blog.csdn.net/Happy_Sunshine_Boy/article/details/108519396</a></p>
+</li>
+<li><p>朱锋. 《SparkSQL内核剖析》</p>
+</li>
+</ul>
+
+    </div>
+
+    
+    
+    
+
+    <div>
+      
+      <div>
+	 
+		<div style="text-align:center;color:#bfbfbf;font-size:16px;"> 
+			<span>-------- 本文结束 </span> <i class="fa fa-paw"></i> <span> 感谢阅读 --------</span>
+		</div> 
+	
+</div>
+      
+    </div>
+        <div class="reward-container">
+  <div></div>
+  <button onclick="var qr = document.getElementById('qr'); qr.style.display = (qr.style.display === 'none') ? 'block' : 'none';">
+    请我喝杯咖啡~
+  </button>
+  <div id="qr" style="display: none;">
+      
+      <div style="display: inline-block;">
+        <img src="/images/wechatpay.png" alt="笨小康 微信打赏">
+        <p>微信打赏</p>
+      </div>
+      
+      <div style="display: inline-block;">
+        <img src="/images/alipay.png" alt="笨小康 支付宝打赏">
+        <p>支付宝打赏</p>
+      </div>
+
+  </div>
+</div>
+
+
+      <footer class="post-footer">
+          <div class="post-tags">
+              <a href="/tags/Spark%E6%BA%90%E7%A0%81/" rel="tag"><i class="fa fa-tag"></i> Spark源码</a>
+              <a href="/tags/SparkSQL/" rel="tag"><i class="fa fa-tag"></i> SparkSQL</a>
+          </div>
+
+        
+
+
+        
+    <div class="post-nav">
+      <div class="post-nav-item">
+    <a href="/2022/05/08/Spark-HDFS%E8%B7%AF%E5%BE%84%E8%A1%80%E7%BC%98%E5%85%B3%E7%B3%BB%E5%AE%9E%E7%8E%B0/" rel="prev" title="Spark HDFS路径血缘关系实现">
+      <i class="fa fa-chevron-left"></i> Spark HDFS路径血缘关系实现
+    </a></div>
+      <div class="post-nav-item"></div>
+    </div>
+      </footer>
+    
+  </article>
+  
+  
+  
+
+
+
+
+          </div>
+          
+
+<script>
+  window.addEventListener('tabs:register', () => {
+    let { activeClass } = CONFIG.comments;
+    if (CONFIG.comments.storage) {
+      activeClass = localStorage.getItem('comments_active') || activeClass;
+    }
+    if (activeClass) {
+      let activeTab = document.querySelector(`a[href="#comment-${activeClass}"]`);
+      if (activeTab) {
+        activeTab.click();
+      }
+    }
+  });
+  if (CONFIG.comments.storage) {
+    window.addEventListener('tabs:click', event => {
+      if (!event.target.matches('.tabs-comment .tab-content .tab-pane')) return;
+      let commentClass = event.target.classList[1];
+      localStorage.setItem('comments_active', commentClass);
+    });
+  }
+</script>
+
+        </div>
+          
+  
+  <div class="toggle sidebar-toggle">
+    <span class="toggle-line toggle-line-first"></span>
+    <span class="toggle-line toggle-line-middle"></span>
+    <span class="toggle-line toggle-line-last"></span>
+  </div>
+
+  <aside class="sidebar">
+    <div class="sidebar-inner">
+
+      <ul class="sidebar-nav motion-element">
+        <li class="sidebar-nav-toc">
+          文章目录
+        </li>
+        <li class="sidebar-nav-overview">
+          站点概览
+        </li>
+      </ul>
+
+      <!--noindex-->
+      <div class="post-toc-wrap sidebar-panel">
+          <div class="post-toc motion-element"><ol class="nav"><li class="nav-item nav-level-1"><a class="nav-link" href="#1-%E6%95%B4%E4%BD%93%E4%BB%8B%E7%BB%8D"><span class="nav-text">1. 整体介绍</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#2-Parser"><span class="nav-text">2. Parser</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#3-Analyzer"><span class="nav-text">3. Analyzer</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#4-Optimizer"><span class="nav-text">4. Optimizer</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#5-SparkPlan"><span class="nav-text">5. SparkPlan</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#6-SparkPlan%E6%89%A7%E8%A1%8C"><span class="nav-text">6. SparkPlan执行</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="nav-text">参考资料</span></a></li></ol></div>
+      </div>
+      <!--/noindex-->
+
+      <div class="site-overview-wrap sidebar-panel">
+        <div class="site-author motion-element" itemprop="author" itemscope itemtype="http://schema.org/Person">
+  <p class="site-author-name" itemprop="name">笨小康</p>
+  <div class="site-description" itemprop="description"></div>
+</div>
+<div class="site-state-wrap motion-element">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+          <a href="/archives/">
+        
+          <span class="site-state-item-count">28</span>
+          <span class="site-state-item-name">日志</span>
+        </a>
+      </div>
+      <div class="site-state-item site-state-categories">
+            <a href="/categories/">
+          
+        <span class="site-state-item-count">5</span>
+        <span class="site-state-item-name">分类</span></a>
+      </div>
+      <div class="site-state-item site-state-tags">
+            <a href="/tags/">
+          
+        <span class="site-state-item-count">12</span>
+        <span class="site-state-item-name">标签</span></a>
+      </div>
+  </nav>
+</div>
+
+
+
+      </div>
+
+    </div>
+  </aside>
+  <div id="sidebar-dimmer"></div>
+
+
+      </div>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        
+
+        
+
+<div class="copyright">
+  
+  &copy; 
+  <span itemprop="copyrightYear">2022</span>
+  <span class="with-love">
+    <i class="fa fa-heart"></i>
+  </span>
+  <span class="author" itemprop="copyrightHolder">笨小康</span>
+</div>
+
+        
+
+
+
+
+
+
+
+
+      </div>
+    </footer>
+  </div>
+
+  
+  <script src="/lib/anime.min.js"></script>
+  <script src="/lib/velocity/velocity.min.js"></script>
+  <script src="/lib/velocity/velocity.ui.min.js"></script>
+
+<script src="/js/utils.js"></script>
+
+<script src="/js/motion.js"></script>
+
+
+<script src="/js/schemes/pisces.js"></script>
+
+
+<script src="/js/next-boot.js"></script>
+
+
+
+
+  
+
+
+
+
+  
+<script src="/js/local-search.js"></script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+  
+
+</body>
+</html>
